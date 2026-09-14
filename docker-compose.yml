@@ -1,0 +1,54 @@
+services:
+  fapiao_cn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fapiao_cn:0.2.0
+    container_name: fapiao_cn
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    environment:
+      FC_HOST: "${FC_HOST:-0.0.0.0}"
+      FC_PORT: "${FC_PORT:-8091}"
+      # 国税查验代理（默认关闭；开启时设置 VERIFY_ENDPOINT 指向你的代理）
+      FC_VERIFY_ENABLED: "${FC_VERIFY_ENABLED:-false}"
+      FC_VERIFY_ENDPOINT: "${FC_VERIFY_ENDPOINT:-}"
+      FC_VERIFY_API_KEY:  "${FC_VERIFY_API_KEY:-}"
+      FC_VERIFY_TIMEOUT:  "${FC_VERIFY_TIMEOUT:-15}"
+      # 性能开关
+      FC_CACHE_SIZE:    "${FC_CACHE_SIZE:-128}"
+      FC_BATCH_WORKERS: "${FC_BATCH_WORKERS:-4}"
+      # 文件大小
+      FC_MAX_FILE_MB:        "${FC_MAX_FILE_MB:-32}"
+      FC_MAX_BATCH_FILES:    "${FC_MAX_BATCH_FILES:-50}"
+      FC_MAX_BATCH_TOTAL_MB: "${FC_MAX_BATCH_TOTAL_MB:-500}"
+      FC_MAX_BATCH_SINGLE_MB: "${FC_MAX_BATCH_SINGLE_MB:-10}"
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 可选：Prometheus 监控（用 --profile monitoring 启用）
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: fapiao_cn_prometheus
+    profiles: ["monitoring"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:

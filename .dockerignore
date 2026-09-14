@@ -1,0 +1,51 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.so
+
+# tests + samples + parse_vevn 都不进镜像（运行时用不到）
+tests/
+samples/
+parse_vevn/
+
+# 构建产物
+dist/
+build/
+wheels/
+.eggs/
+*.tar.gz
+
+# 工具缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# git
+.git/
+.gitignore
+.gitattributes
+
+# 日志 / PID
+logs/*.log
+logs/*.pid
+*.pid
+.fapiao_cn.pid
+.uvicorn.pid
+
+# 文档 / CI
+README.md
+CHANGELOG.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+.env*
+.github/
+deploy/

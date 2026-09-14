@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+wheels/
+parse_vevn/
+.env
+logs/*.log
+logs/*.pid
+.fapiao_cn.pid
+.uvicorn.pid  # legacy
+*.egg-info/
+dist/
+build/
+fapiao_cn-portable.tar.gz
+_fpapi_portable_sim_venv/  # legacy
+_fapiao_cn_portable_sim_venv/
+
+# ---- 公开仓库剥离项 ----
+# samples/ 与 tests/ 均为内部验证用，不进入公开仓库
+samples/
+tests/

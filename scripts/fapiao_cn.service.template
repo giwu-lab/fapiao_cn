@@ -1,0 +1,43 @@
+# scripts/fapiao_cn.service — systemd unit template for fapiao_cn.
+#
+# Place this at /etc/systemd/system/fapiao_cn.service (root-owned, 0644).
+# ``scripts/install_portable.sh`` renders it with the right DEST_DIR /
+# user when the operator opts in.
+#
+# Environment overrides (set in /etc/fapiao_cn/fapiao_cn.env):
+#     FC_HOST        bind host   (default 0.0.0.0)
+#     FC_PORT        bind port   (default 8091)
+#     FC_USER        system user (default fapiao_cn)
+
+[Unit]
+Description=fapiao_cn — electronic invoice field extractor
+Documentation=https://github.com/giwu-lab/fapiao_cn
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__FC_USER__
+Group=__FC_USER__
+WorkingDirectory=__DEST_DIR__
+EnvironmentFile=-__DEST_DIR__/fapiao_cn.env
+ExecStart=__DEST_DIR__/parse_vevn/bin/python -m uvicorn fapiao_cn.server:app \
+  --host ${FC_HOST} \
+  --port ${FC_PORT}
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fapiao_cn
+
+# Hardening (minimal — fapiao_cn serves an internal invoice API).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=__DEST_DIR__/logs
+
+[Install]
+WantedBy=multi-user.target

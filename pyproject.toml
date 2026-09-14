@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling>=1.32.0,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fapiao_cn"
+version = "0.2.0"
+description = "中国电子发票字段提取服务（PDF + XML）"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "fapiao_cn" },
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+    "pdfplumber>=0.11.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.4.0",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+fapiao_cn        = "fapiao_cn.cli:main"
+fapiao_cn-server = "fapiao_cn.server:main"
+
+[project.urls]
+Homepage = "https://github.com/giwu-lab/fapiao_cn"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fapiao_cn"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/fapiao_cn/**",
+    "README.md",
+    "pyproject.toml",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+    "mypy>=1.10.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+# Starlette currently deprecates the use of ``httpx`` with
+# ``starlette.testclient`` and recommends ``httpx2`` instead — but
+# ``httpx2`` is not yet published on PyPI, so we cannot act on the
+# suggestion yet.  Silence just this specific warning so it does not
+# pollute every pytest run; the rule will be removed once ``httpx2``
+# becomes installable.
+#
+# ``StarletteDeprecationWarning`` lives in ``starlette.exceptions`` and
+# is not exposed as a builtin name, so we filter on its parent class
+# ``UserWarning`` with a tight message regex to keep the scope narrow.
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated.*:UserWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = ["dist", "build", "parse_vevn", "wheels"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+exclude = ["parse_vevn/", "build/", "dist/"]
