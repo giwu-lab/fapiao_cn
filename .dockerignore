@@ -41,11 +41,9 @@ logs/*.pid
 .uvicorn.pid
 
 # 文档 / CI
-README.md
 CHANGELOG.md
 Dockerfile
 docker-compose.yml
 .dockerignore
 .env*
 .github/
-deploy/

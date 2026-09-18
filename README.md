@@ -31,8 +31,9 @@ fapiao_cn/
 │   ├── setup.sh              # 创建 parse_vevn/ + pip install -e .
 │   ├── cli.sh                # start/stop/restart/test（开发用）
 │   ├── build-portable.sh     # 打 fapiao_cn-portable.tar.gz
-│   ├── install_portable.sh   # 离线目标机解压+启动（systemd 或 nohup）
+│   ├── install_portable.sh   # 离线目标机解压+启动（systemd / supervisor / nohup）
 │   ├── fapiao_cn.service.template# systemd unit 模板（被 install_portable.sh 渲染）
+│   ├── fapiao_cn.supervisor.conf # Supervisor program 模板（被 install_portable.sh 渲染）
 │   ├── uninstall_systemd.sh  # 清理 systemd 注册（保留 deployment 目录）
 │   └── lint.sh               # ruff 检查
 ├── build-scripts/            # 发布相关 Python 脚本
@@ -114,6 +115,40 @@ fapiao_cn-server --host 0.0.0.0 --port 8091
 
 默认端口 `8091`（可用 `PORT` / `FPAPI_PORT` 环境变量覆盖）。
 
+### Supervisor 守护（无 systemd 环境）
+
+适合不支持 systemd 的发行版（CentOS 6、部分精简容器镜像）或不便写 `/etc/systemd/system` 的部署。
+
+```bash
+bash scripts/install_portable.sh --supervisor              # 解压 + 渲染 + supervisorctl update
+bash scripts/install_portable.sh --supervisor /opt/fapiao_cn  # 自定义 DEST_DIR
+```
+
+执行后会在 `/etc/supervisor/conf.d/fapiao_cn.conf` 写入 program 定义；Supervisor 守护 + 崩溃自启（与 `fapiao_cn.service` 二选一，不要并存）。
+
+常用命令：
+
+```bash
+supervisorctl status fapiao_cn      # 状态
+supervisorctl restart fapiao_cn     # 重启
+supervisorctl tail -f fapiao_cn     # stdout 实时日志
+supervisorctl tail -f fapiao_cn stderr  # stderr 实时日志
+
+# 调整 host/port：编辑 /etc/supervisor/conf.d/fapiao_cn.conf 的 environment= 行
+supervisorctl reread && supervisorctl update fapiao_cn
+```
+
+未安装 supervisor 时提示安装命令：
+
+```bash
+# Debian/Ubuntu
+sudo apt install supervisor
+# RHEL/CentOS
+sudo yum install supervisor
+# pip（任意发行版）
+sudo pip install supervisor
+```
+
 ## API
 
 | 方法   | 路径                    | 说明                                       |
@@ -126,7 +161,7 @@ fapiao_cn-server --host 0.0.0.0 --port 8091
 | POST | `/verify`             | 国家税务总局查验代理（需 `FC_VERIFY_ENABLED=true`） |
 | POST | `/extract-and-verify` | 一站式：提取 + 查验                               |
 
-### 性能与环境变量（v0.2.0）
+### 性能与环境变量（v1.0.0）
 
 所有环境变量前缀为 `FC_`（如 `FC_PORT`、`FC_CACHE_SIZE`），可通过 `.env` 文件或 `docker-compose.yml` 注入。
 
@@ -356,14 +391,29 @@ docker compose up -d
 curl -fsS http://localhost:8091/health
 curl -fsS http://localhost:8091/health/full | jq
 
-# 启用 Prometheus 监控（可选 profile）
-docker compose --profile monitoring up -d
-# 浏览器访问 http://localhost:9090
-
 # 配置国税查验（在 .env 里）
 echo "FC_VERIFY_ENABLED=true" >> .env
 echo "FC_VERIFY_ENDPOINT=http://your-proxy/verify" >> .env
 docker compose restart
+```
+
+国内网络可切换 apt + PyPI 镜像源（默认阿里云）：
+
+```bash
+# 默认：阿里云 apt + PyPI 镜像源（无需显式传参）
+docker build -t fapiao_cn:1.0.0 .
+
+# 切到清华 TUNA（apt + PyPI 一起切）
+docker build \
+  --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
+  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+  -t fapiao_cn:1.0.0 .
+
+# 关闭（恢复官方源，海外/CI 环境）
+docker build \
+  --build-arg APT_MIRROR= \
+  --build-arg PIP_INDEX_URL= \
+  -t fapiao_cn:1.0.0 .
 ```
 
 镜像特性：
@@ -371,3 +421,17 @@ docker compose restart
 - 非 root 运行（`fapiao_cn` 用户）
 - 内置 `HEALTHCHECK`（30s 间隔，`/health` 端点）
 - `/app/logs` 通过 volume 挂载到宿主机
+
+容器内日志会双写到：
+- **宿主 `./logs/server.log`**（volume 挂载，可 `tail -f`）
+- **`docker logs fapiao_cn`**（stdout/stderr，由 json-file 收集，10m × 3 自动轮转）
+
+时区：`Asia/Shanghai`（UTC+8，容器内装 `tzdata` 包）。格式 `YYYY-MM-DD HH:MM:SS,mmm [LEVEL] message`，参考：
+
+```
+2026-09-09 11:37:28,006 [INFO] Started server process [1]
+2026-09-09 11:37:28,006 [INFO] Waiting for application startup.
+2026-09-09 11:37:28,006 [INFO] Application startup complete.
+2026-09-09 11:37:28,006 [INFO] Uvicorn running on http://0.0.0.0:8091
+2026-09-09 11:37:29,015 [INFO] 127.0.0.1:54321 - "GET /health HTTP/1.1" 200 OK
+```

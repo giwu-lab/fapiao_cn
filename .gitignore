@@ -1,22 +1,50 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-.pytest_cache/
-.ruff_cache/
-wheels/
-parse_vevn/
-.env
-logs/*.log
-logs/*.pid
-.fapiao_cn.pid
-.uvicorn.pid  # legacy
-*.egg-info/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
 dist/
 build/
-fapiao_cn-portable.tar.gz
-_fpapi_portable_sim_venv/  # legacy
-_fapiao_cn_portable_sim_venv/
+*.egg-info/
+*.egg
+wheels/
 
-# ---- 公开仓库剥离项 ----
-# samples/ 与 tests/ 均为内部验证用，不进入公开仓库
-samples/
-tests/
+# Unit test / coverage reports
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# Virtual environments
+parse_vevn/
+.venv/
+venv/
+env/
+
+# Logs and runtime artefacts
+logs/
+*.log
+server.log
+
+# Runtime / deployment artefacts
+.fapiao_cn.pid
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

@@ -6,12 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-18
+
 ### Renamed
 - Project: `fpapi` → `fapiao_cn` (包名、控制台脚本、systemd unit、Docker image、env prefix 全部改名)。
   - 包导入: `import fpapi` → `import fapiao_cn`
   - CLI scripts: `fpapi` / `fpapi-server` → `fapiao_cn` / `fapiao_cn-server`
   - systemd service: `fapiao_cn.service`（unit 模板由 `scripts/install_portable.sh` 渲染）
-  - Docker image: `fapiao_cn:0.2.0`
+  - Docker image: `fapiao_cn:1.0.0`
   - 环境变量前缀: `PDF_` → `FC_`（所有 `FC_HOST` / `FC_PORT` / `FC_CACHE_SIZE` 等）
   - PID 文件: `.uvicorn.pid` → `.fapiao_cn.pid`
   - 默认安装路径: `/opt/fpapi` → `/opt/fapiao_cn`

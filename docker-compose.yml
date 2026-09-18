@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: fapiao_cn:0.2.0
+    image: fapiao_cn:1.0.0
     container_name: fapiao_cn
     restart: unless-stopped
     ports:
@@ -37,18 +37,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  # 可选：Prometheus 监控（用 --profile monitoring 启用）
-  prometheus:
-    image: prom/prometheus:v2.55.0
-    container_name: fapiao_cn_prometheus
-    profiles: ["monitoring"]
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    restart: unless-stopped
-
-volumes:
-  prometheus_data:
