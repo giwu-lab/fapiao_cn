@@ -39,6 +39,9 @@ server.log
 
 # Local environment / secrets (never commit real API keys)
 .env
+# Local API key JSON store (operator-created for dev / JSON-mode
+# testing).  Use deploy/keys.json.example as the committed template.
+keys.json
 
 # Real-world invoice samples (contain sensitive buyer/seller data);
 # only the public test fixtures under tests/ are committed.
