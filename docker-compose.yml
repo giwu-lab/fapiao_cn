@@ -24,14 +24,22 @@ services:
       FC_MAX_BATCH_FILES:    "${FC_MAX_BATCH_FILES:-50}"
       FC_MAX_BATCH_TOTAL_MB: "${FC_MAX_BATCH_TOTAL_MB:-500}"
       FC_MAX_BATCH_SINGLE_MB: "${FC_MAX_BATCH_SINGLE_MB:-10}"
+      # API 鉴权（默认开启；两值都空时回退到 dev 模式 + WARN 日志）
+      FC_API_AUTH_ENABLED: "${FC_API_AUTH_ENABLED:-true}"
+      FC_API_KEYS:          "${FC_API_KEYS:-}"
+      FC_API_KEYS_FILE:     "${FC_API_KEYS_FILE:-}"
+      FC_API_KEY_DEFAULT_RPM:  "${FC_API_KEY_DEFAULT_RPM:-60}"
+      FC_API_KEY_DEFAULT_BURST: "${FC_API_KEY_DEFAULT_BURST:-10}"
+      FC_API_LEGACY_ALLOW: "${FC_API_LEGACY_ALLOW:-false}"
     volumes:
       - ./logs:/app/logs
+     # - ./keys.json:/app/keys.json:ro  # 环境变量修改 ${FC_API_KEYS_FILE:/app/keys.json}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8091/health"]
-      interval: 30s
-      timeout: 5s
+      interval: 3600s
+      timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s
     logging:
       driver: json-file
       options:

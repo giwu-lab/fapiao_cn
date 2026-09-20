@@ -5,8 +5,8 @@ dispatches to the appropriate parser.  All outputs share the same
 ``ExtractResponse`` shape regardless of the underlying format.
 
 When ``Settings.cache_size > 0`` (the default) the function consults an
-LRU cache keyed on ``sha256(contents) + filename + with_raw``.  Repeat
-uploads of the same file return the cached response instantly.
+LRU cache keyed on ``sha256(contents) + filename``.  Repeat uploads of
+the same file return the cached response instantly.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from fapiao_cn.pipeline import run
 from fapiao_cn.schemas import ExtractResponse, InvoiceRecord
 
 
-def _detect_format(contents: bytes, filename: str) -> str:
+def detect_format(contents: bytes, filename: str) -> str:
     """Identify document format: ``"xml"`` or ``"pdf"`` (default)."""
 
     if filename and filename.lower().endswith(".xml"):
@@ -37,7 +37,7 @@ def _parse_xml(contents: bytes, filename: str) -> ExtractResponse:
     if record is None:
         return ExtractResponse(
             file=filename,
-            error="xml_parse_failed: malformed or unsupported XML",
+            message="error: xml_parse_failed: malformed or unsupported XML",
         )
     return ExtractResponse(
         file=filename,
@@ -59,7 +59,7 @@ def _parse_xml(contents: bytes, filename: str) -> ExtractResponse:
     )
 
 
-def _build_response(record: InvoiceRecord, filename: str, pdf_raw, warnings) -> ExtractResponse:
+def _build_response(record: InvoiceRecord, filename: str, message: str) -> ExtractResponse:
     return ExtractResponse(
         file=filename,
         page_count=record.page_count,
@@ -77,41 +77,40 @@ def _build_response(record: InvoiceRecord, filename: str, pdf_raw, warnings) -> 
         payee=record.payee,
         reviewer=record.reviewer,
         drawer=record.drawer,
-        pdf_raw=pdf_raw,
-        warnings=warnings,
+        message=message,
     )
 
 
-def parse_pdf(contents: bytes, filename: str = "", with_raw: bool = False) -> ExtractResponse:
+def parse_pdf(contents: bytes, filename: str = "") -> ExtractResponse:
     if not contents:
-        return ExtractResponse(file=filename, error="empty_file")
+        return ExtractResponse(file=filename, message="error: empty_file")
     max_bytes = settings.max_file_mb * 1024 * 1024
     if len(contents) > max_bytes:
         return ExtractResponse(
             file=filename,
-            error=f"file_too_large: {len(contents)} > {max_bytes} bytes",
+            message=f"error: file_too_large: {len(contents)} > {max_bytes} bytes",
         )
 
     # Cache lookup (LRU; honours settings.cache_size).
     cache = get_cache()
-    cached = cache.get(contents, filename, with_raw)
+    cached = cache.get(contents, filename)
     if cached is not None:
         return cached  # type: ignore[return-value]
 
-    if _detect_format(contents, filename) == "xml":
+    if detect_format(contents, filename) == "xml":
         resp = _parse_xml(contents, filename)
     else:
         try:
-            result = run(contents, with_raw=with_raw)
+            result = run(contents)
         except (ValueError, KeyError, AttributeError, PdfminerException) as exc:
             resp = ExtractResponse(
                 file=filename,
-                error=f"parse_failed: {exc}",
+                message=f"error: parse_failed: {exc}",
             )
         else:
-            resp = _build_response(result.record, filename, result.pdf_raw, result.warnings)
+            resp = _build_response(result.record, filename, result.message)
 
-    # Only cache successful responses — error responses are not stable.
-    if not resp.error:
-        cache.put(contents, filename, with_raw, resp)
+    # Only cache successful and soft-message responses — hard errors are not stable.
+    if not resp.message.startswith("error:"):
+        cache.put(contents, filename, resp)
     return resp

@@ -1,0 +1,568 @@
+"""Unit tests for individual parser functions."""
+
+from __future__ import annotations
+
+from fapiao_cn.parsers.invoice import (
+    _extract_amounts,
+    _extract_invoice_number,
+    _extract_invoice_type,
+    _extract_issue_date,
+    _extract_names_and_tax_ids,
+)
+from fapiao_cn.parsers.merged_code import (
+    _extract_buyer_from_cipher_lines,
+    _extract_seller_after_total,
+)
+from fapiao_cn.utils import extract_people, looks_like_company_name, looks_like_tax_id
+
+
+class TestLooksLikeCompanyName:
+    def test_company_keyword(self):
+        assert looks_like_company_name("重庆市旺成科技股份有限公司")
+        assert looks_like_company_name("重庆京东创盟信息技术有限公司")
+
+    def test_too_short(self):
+        assert not looks_like_company_name("abc")
+        assert not looks_like_company_name("")
+
+    def test_no_keyword(self):
+        assert not looks_like_company_name("随便一段文字")
+
+
+class TestExtractInvoiceType:
+    def test_normal(self):
+        text = "电子发票（增值税专用发票）"
+        assert _extract_invoice_type(text) == "电子发票（增值税专用发票）"
+
+    def test_common(self):
+        text = "电子发票（普通发票）"
+        assert _extract_invoice_type(text) == "电子发票（普通发票）"
+
+    def test_with_spaces(self):
+        text = "电 子 发 票（增 值 税 专 用 发 票）"
+        assert _extract_invoice_type(text) == "电子发票（增值税专用发票）"
+
+    def test_empty(self):
+        assert _extract_invoice_type("") == ""
+
+
+class TestExtractInvoiceNumber:
+    def test_standard(self):
+        text = "发票代码：255020000001\n发票号码：29241041"
+        code, no = _extract_invoice_number(text)
+        assert code == "255020000001"
+        assert no == "29241041"
+
+    def test_embedded_in_receipt_monitor(self):
+        text = "统一发票监制 26502000001100907556"
+        code, no = _extract_invoice_number(text)
+        assert code == ""
+        assert no == "26502000001100907556"
+
+    def test_empty(self):
+        assert _extract_invoice_number("") == ("", "")
+
+
+class TestExtractIssueDate:
+    def test_standard(self):
+        text = "开票日期：2025年11月27日"
+        assert _extract_issue_date(text) == "2025-11-27"
+
+    def test_after_tax_bureau(self):
+        text = "国家税务总局 2026年06月08日"
+        assert _extract_issue_date(text) == "2026-06-08"
+
+    def test_with_spaces(self):
+        text = "开票日期  :  2025  年  11  月  27  日"
+        assert _extract_issue_date(text) == "2025-11-27"
+
+
+class TestExtractNamesAndTaxIds:
+    def test_standard_two_lines(self):
+        text = (
+            "名 称 : 重庆市旺成科技股份有限公司\n"
+            "纳税人识别号 : 91500106622015389N\n"
+            "名 称 : 维克多汽车技术（上海）有限公司\n"
+            "纳税人识别号 : 91310000692939379C\n"
+        )
+        buyer, buyer_tax, seller, seller_tax = _extract_names_and_tax_ids(text)
+        assert buyer == "重庆市旺成科技股份有限公司"
+        assert buyer_tax == "91500106622015389N"
+        assert seller == "维克多汽车技术（上海）有限公司"
+        assert seller_tax == "91310000692939379C"
+
+    def test_two_column_same_line_with_colon(self):
+        text = (
+            "购 销\n"
+            "买 名 称 : 重庆市旺成科技股份有限公司 售 名 称 : 重庆京东创盟信息技术有限公司\n"
+            "信 统一社会信用代码/纳税人识别号： 统一社会信用代码/纳税人识别号：\n"
+            "91500106622015389N 91310000692939379C\n"
+        )
+        buyer, buyer_tax, seller, seller_tax = _extract_names_and_tax_ids(text)
+        assert buyer == "重庆市旺成科技股份有限公司"
+        assert seller == "重庆京东创盟信息技术有限公司"
+
+    def test_two_column_with_value_on_subsequent_line(self):
+        text = (
+            "购 销\n"
+            "买 名称： 售 名称：\n"
+            "信 息 ...\n"
+            "项目名称 规格型号 单 价\n"
+            "*水*水费 100 10\n"
+            "重庆市旺成科技股份有限公司 重庆水资源产业股份有限公司西城自来水分公司\n"
+            "91500106622015389N 91500107MA61QQQ4XP\n"
+        )
+        buyer, buyer_tax, seller, seller_tax = _extract_names_and_tax_ids(text)
+        assert buyer == "重庆市旺成科技股份有限公司"
+        assert buyer_tax == "91500106622015389N"
+        assert seller == "重庆水资源产业股份有限公司西城自来水分公司"
+        assert seller_tax == "91500107MA61QQQ4XP"
+
+    def test_personal_dekai_merged_row(self):
+        """个人代开 variant: column header bytes are split across rows;
+        the actual buyer/seller names sit on a single physical line
+        under the tax-id header, with both tax ids on the next line."""
+
+        text = (
+            "购 销\n"
+            "买 名称： 售 名称：\n"
+            "方 方\n"
+            "信 信 统一社会信用代码/纳税人识别号： 统一社会信用代码/纳税人识别号：\n"
+            "息 息\n"
+            "项目名称 规格型号 单 位 数 量 单 价 金 额 税率/征收率 税 额\n"
+            "重庆市旺成科技股份有限公司 颜国明\n"
+            "91500106622015389N 92500106MA5XUBM0XC\n"
+        )
+        buyer, buyer_tax, seller, seller_tax = _extract_names_and_tax_ids(text)
+        assert buyer == "重庆市旺成科技股份有限公司"
+        assert buyer_tax == "91500106622015389N"
+        assert seller == "颜国明"
+        assert seller_tax == "92500106MA5XUBM0XC"
+
+    def test_missing_tax_id_backfilled_from_cache(self, monkeypatch):
+        """购_餐饮_03.pdf style: company name is printed but the
+        统一社会信用代码/纳税人识别号 value is omitted.  When the
+        (name -> tax_id) cache has been seeded with that company, the
+        parser must back-fill the missing slot."""
+
+        from fapiao_cn.parsers import invoice as inv_mod
+
+        # Reset cache to a known state.
+        inv_mod.clear_company_tax_id_cache()
+        try:
+            inv_mod.record_company_tax_id(
+                "重庆市旺成科技股份有限公司", "91500106622015389N"
+            )
+
+            text = (
+                "电子发票（普通发票）\n"
+                "购 销\n"
+                "买 名称:重庆市旺成科技股份有限公司 售 名称:杭州宜家家居有限公司上海分公司\n"
+                "方 方\n"
+                "统一社会信用代码/纳税人识别号: 统一社会信用代码/纳税人识别号:\n"
+                "信 信\n"
+                "息 息\n"
+                "项目名称 规格型号 单 位 数 量 单 价 金 额 税率/征收率 税 额\n"
+                "*餐饮服务*餐饮服务 件 1 37.73 37.73 6% 2.26\n"
+                "合 计 37.73 2.26\n"
+                "价税合计(大写) 叁拾玖圆玖角玖分 （小写） 39.99\n"
+                "收款人:徐洁敏; 复核人:陈晨;\n"
+                "开票人:汪兴平\n"
+            )
+            buyer, buyer_tax, seller, seller_tax = _extract_names_and_tax_ids(text)
+            assert buyer == "重庆市旺成科技股份有限公司"
+            assert buyer_tax == "91500106622015389N"  # back-filled from cache
+            assert seller == "杭州宜家家居有限公司上海分公司"
+            assert seller_tax == ""  # never seen, no cache entry
+        finally:
+            inv_mod.clear_company_tax_id_cache()
+
+    def test_successful_extraction_populates_cache(self):
+        """Resolving a (name, tax_id) pair should register it in the
+        cache so subsequent lookups succeed even without a fresh
+        successful extraction."""
+
+        from fapiao_cn.parsers import invoice as inv_mod
+
+        inv_mod.clear_company_tax_id_cache()
+        try:
+            text = (
+                "名 称 : 重庆市旺成科技股份有限公司\n"
+                "纳税人识别号 : 91500106622015389N\n"
+                "名 称 : 维克多汽车技术（上海）有限公司\n"
+                "纳税人识别号 : 91310000692939379C\n"
+            )
+            _extract_names_and_tax_ids(text)
+            assert (
+                inv_mod.lookup_company_tax_id("重庆市旺成科技股份有限公司")
+                == "91500106622015389N"
+            )
+            assert (
+                inv_mod.lookup_company_tax_id("维克多汽车技术（上海）有限公司")
+                == "91310000692939379C"
+            )
+            assert inv_mod.lookup_company_tax_id("未知的公司") == ""
+        finally:
+            inv_mod.clear_company_tax_id_cache()
+
+
+class TestExtractAmounts:
+    def test_standard(self):
+        text = (
+            "合 计 ¥124018.66 ¥16122.43\n"
+            "价税合计（大写） 壹拾肆万零壹佰肆拾壹圆零玖分 （小写） ¥140141.09"
+        )
+        sub, tax, total, cn = _extract_amounts(text)
+        assert sub == "124018.66"
+        assert tax == "16122.43"
+        assert total == "140141.09"
+        assert cn == "壹拾肆万零壹佰肆拾壹圆零玖分"
+
+    def test_amounts_before_heji(self):
+        text = (
+            "¥27.69 ¥0.83\n"
+            "合 计\n"
+            "价税合计（大写） 贰拾捌圆伍角贰分 （小写） ¥28.52"
+        )
+        sub, tax, total, cn = _extract_amounts(text)
+        assert sub == "27.69"
+        assert tax == "0.83"
+        assert total == "28.52"
+        assert cn == "贰拾捌圆伍角贰分"
+
+    def test_zero_amount(self):
+        text = (
+            "合 计 ¥0.00 ¥0.00\n"
+            "价税合计（大写） 零圆整 （小写） ¥0.00"
+        )
+        sub, tax, total, cn = _extract_amounts(text)
+        assert sub == "0.00"
+        assert tax == "0.00"
+        assert total == "0.00"
+        assert cn == "零圆整"
+
+    def test_amounts_with_negative_line_items(self):
+        """购_滴滴_01: line items include a negative refund row.  The
+        ``合 计`` row reports the net amounts (156.80 - 30.87 = 125.93)
+        and ``价税合计`` shows the grand total (129.70).  Make sure the
+        fallback window picker does not mistakenly include a negative
+        price from the table when ``合 计`` is followed by nothing."""
+
+        text = (
+            "*交通运输服务*客运服 156.80 1 156.80 3% 4.70\n"
+            "*交通运输服务*客运服 -30.87 3% -0.93\n"
+            "合 计 ¥125.93 ¥3.77\n"
+            "出行人 有效身份证件号 出行日期 出发地 到达地\n"
+            "价税合计（大写） 壹佰贰拾玖圆柒角整 （小写）¥129.70\n"
+        )
+        sub, tax, total, cn = _extract_amounts(text)
+        assert sub == "125.93"
+        assert tax == "3.77"
+        assert total == "129.70"
+        assert cn == "壹佰贰拾玖圆柒角整"
+
+    def test_total_with_single_decimal_digit(self):
+        """购_滴滴_02: total is printed as ``¥ 46.3`` without trailing
+        zero.  Must normalise to ``46.30`` and still pair with the
+        preceding 大写."""
+
+        text = (
+            "合 计 ¥ 44.95 ¥ 1.35\n"
+            "出行人 有效身份证件号 出行日期 出发地 到达地\n"
+            "价税合计(大写) ⨂ 肆拾陆元叁角 (小写) ¥ 46.3\n"
+        )
+        sub, tax, total, cn = _extract_amounts(text)
+        assert sub == "44.95"
+        assert tax == "1.35"
+        assert total == "46.30"
+        assert cn == "肆拾陆元叁角"
+
+    def test_total_upper_strips_noise_glyph(self):
+        """Daxie capture includes a stray ``⨂`` glyph (watermark).  The
+        ``_AMOUNT_CN_RE`` post-filter must strip it and return only the
+        valid Chinese-amount characters."""
+
+        text = "价税合计(大写) ⨂ 壹佰元整 (小写) ¥100"
+        _, _, total, cn = _extract_amounts(text)
+        assert total == "100.00"
+        assert cn == "壹佰元整"
+
+    def test_tax_free_heji_with_wildcard(self):
+        """购_通信_01.pdf style: 合计行只有金额 ``¥358.00`` 和 ``*``，
+        没有税额数字。``tax_amount`` 必须为 ``"0.00"``，而不是从
+        窗口里抓一个数字填充。"""
+
+        text = (
+            "*电信服务*通信服务费 无 次 1 358 358.00 * *\n"
+            "合 计 ¥358.00 *\n"
+            "价税合计（大写） 叁佰伍拾捌圆整 （小写）¥358.00"
+        )
+        sub, tax, total, _ = _extract_amounts(text)
+        assert sub == "358.00"
+        assert tax == "0.00"
+        assert total == "358.00"
+
+    def test_fallback_does_not_double_assign_single_price(self):
+        """当窗口内只有 1 个带币种前缀的数字时（合计行被换行或格式
+        打散），``tax_amount`` 必须留空，而不是把同一金额复制。"""
+
+        text = (
+            "项目名称 单价 金额 税率 税额\n"
+            "*服务*服务费 次 1 100.00 100.00\n"
+            "合 计\n"
+            "¥100.00\n"
+            "价税合计（大写） 壹佰元整 （小写）¥100.00"
+        )
+        sub, tax, total, _ = _extract_amounts(text)
+        assert sub == "100.00"
+        assert tax == ""
+        assert total == "100.00"
+
+
+class TestExtractPeople:
+    def test_inline(self):
+        text = "收款人: 张三 复核: 李四 开票人: 王五"
+        payee, reviewer, drawer = extract_people(text)
+        assert payee == "张三"
+        assert reviewer == "李四"
+        assert drawer == "王五"
+
+    def test_standard_line(self):
+        text = "收款人：蓝桂涛\n复核：王秋华\n开票人：高玉玲"
+        payee, reviewer, drawer = extract_people(text)
+        assert payee == "蓝桂涛"
+        assert reviewer == "王秋华"
+        assert drawer == "高玉玲"
+
+    def test_empty(self):
+        assert extract_people("") == ("", "", "")
+
+
+class TestMergedCodeHelpers:
+    def test_looks_like_tax_id(self):
+        assert looks_like_tax_id("91500106622015389N")
+        assert looks_like_tax_id("91310000692939379C")
+        assert not looks_like_tax_id("")
+        assert not looks_like_tax_id("short")
+
+    def test_extract_buyer_from_cipher_lines(self):
+        lines = [
+            "header",
+            "重庆市旺成科技股份有限公司 >63*4<706-041<+/4149-2<76<>",
+            "91500106622015389N >63*4<...",
+        ]
+        name, tax = _extract_buyer_from_cipher_lines(lines)
+        assert name == "重庆市旺成科技股份有限公司"
+        assert tax == "91500106622015389N"
+
+    def test_extract_buyer_when_cipher_mixed_with_digits(self):
+        """购_油品_03.pdf style: the cipher text starts with digits and
+        ``+/-`` chars right after the company name, so a naive
+        ``split(">")`` would still leave cipher characters trailing the
+        company name and fail ``looks_like_company_name``."""
+
+        lines = [
+            "header",
+            "重庆市旺成科技股份有限公司 1+64558-0/0<</>2<4<<8147//4",
+            "91500106622015389N 629<+2103/4+791<4+//68273>*",
+            "72+3++8648-1>-23<564-66+8**",
+            ">-9<70->2+723/4<6+0*464->>7",
+        ]
+        name, tax = _extract_buyer_from_cipher_lines(lines)
+        assert name == "重庆市旺成科技股份有限公司"
+        assert tax == "91500106622015389N"
+
+    def test_extract_company_prefix_three_strategies(self):
+        from fapiao_cn.parsers.merged_code import _extract_company_prefix
+
+        # Strategy 1: split by cipher/space, first company-name token wins.
+        assert (
+            _extract_company_prefix(
+                "重庆市旺成科技股份有限公司 >63*4<706-041<+/4149-2<76<>"
+            )
+            == "重庆市旺成科技股份有限公司"
+        )
+        # Strategy 1 also handles the digit-leading cipher variant from
+        # 购_油品_03.
+        assert (
+            _extract_company_prefix(
+                "重庆市旺成科技股份有限公司 1+64558-0/0<</>2<4<<8147//4"
+            )
+            == "重庆市旺成科技股份有限公司"
+        )
+        # Strategy 3 fallback: when there is no space and the entire
+        # prefix before the first cipher char passes
+        # ``looks_like_company_name``, return as-is.
+        assert (
+            _extract_company_prefix("重庆京东创盟信息技术有限公司<1+2-3/4>")
+            == "重庆京东创盟信息技术有限公司"
+        )
+
+    def test_extract_seller_after_total(self):
+        lines = [
+            "叁佰贰拾壹圆整 ¥321.00",
+            "重庆中油红綦能源发展有限公司",
+            "91500222MA5XDW8PX6",
+        ]
+        name, tax = _extract_seller_after_total(lines)
+        assert name == "重庆中油红綦能源发展有限公司"
+        assert tax == "91500222MA5XDW8PX6"
+
+
+class TestNonTaxReceipt:
+    def _text(self) -> str:
+        return (
+            "中央非税收入统一票据（电子）\n"
+            "票据代码:00010126 票据号码:0012090205\n"
+            "交款人统一社会信用代码:91500106622015389N 校验码:2b5d4a\n"
+            "交款人:重庆市旺成科技股份有限公司 开票日期:2026-06-29\n"
+            "项目编码 项目名称 单位 数量 标准 金额（元） 备注\n"
+            "056990124030发明专利第3年年费 元 0.15 900.00 135.00\n"
+            "金额合计（大写）壹 佰叁拾伍元整 （小写）135.00\n"
+            "申请号:2024103711884_缴费日期:2026-06-26_缴费方式:网上支付_订单号:202606269021113479\n"
+            "其\n"
+            "他\n"
+            "信\n"
+            "息\n"
+            "收款单位（章）：国 家知识产权局专利局 复核人： 王舒 收款人：胡瀛\n"
+        )
+
+    def test_parse_central_non_tax_receipt(self):
+        from fapiao_cn.parsers.non_tax_receipt import parse_central_non_tax_receipt
+
+        rec = parse_central_non_tax_receipt(self._text(), {})
+        assert rec.invoice_type == "中央非税收入统一票据（电子）"
+        assert rec.invoice_number == "0012090205"
+        assert rec.issue_date == "2026-06-29"
+        assert rec.buyer_name == "重庆市旺成科技股份有限公司"
+        assert rec.buyer_tax_id == "91500106622015389N"
+        # "国 家知识产权局专利局" should merge whitespace.
+        assert rec.seller_name == "国家知识产权局专利局"
+        assert rec.seller_tax_id == ""
+        assert rec.amount_without_tax == "135.00"
+        assert rec.tax_amount == ""
+        assert rec.total_amount == "135.00"
+        assert rec.total_amount_upper == "壹佰叁拾伍元整"
+        assert rec.payee == "胡瀛"
+        assert rec.reviewer == "王舒"
+        assert rec.drawer == ""
+
+    def test_missing_seller_collapses_whitespace(self):
+        from fapiao_cn.parsers.non_tax_receipt import _clean_seller_name
+
+        assert _clean_seller_name("  国 家知识产权局专利局  ") == "国家知识产权局专利局"
+
+
+class TestXmlParser:
+    """Unit tests for ``fapiao_cn.parsers.xml_invoice``."""
+
+    def test_parse_xml_bytes(self):
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        with open("samples/购_材料_01.xml", "rb") as f:
+            rec = parse_xml_invoice(f.read())
+        assert rec is not None
+        assert rec.invoice_type == "电子发票（增值税专用发票）"
+        assert rec.invoice_number == "25502000000129241041"
+        assert rec.seller_name == "重庆铜睿机械有限公司"
+        assert rec.total_amount == "140141.09"
+
+    def test_parse_xml_vat_special(self):
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        with open("samples/销_产品_01.xml", "rb") as f:
+            rec = parse_xml_invoice(f.read())
+        assert rec.invoice_type == "电子发票（增值税专用发票）"
+        assert rec.buyer_name == "新大洲本田摩托（苏州）有限公司"
+        assert rec.total_amount == "6034961.05"
+
+    def test_parse_xml_common(self):
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        with open("samples/购_油品_01.xml", "rb") as f:
+            rec = parse_xml_invoice(f.read())
+        assert rec.invoice_type == "电子发票（普通发票）"
+        assert rec.payee == ""
+        assert rec.reviewer == ""
+        assert rec.drawer == "邹玮"
+
+    def test_parse_xml_page_count(self):
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        with open("samples/购_零售_01.xml", "rb") as f:
+            rec = parse_xml_invoice(f.read())
+        assert rec.page_count == 1
+
+    def test_parse_xml_malformed(self):
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        assert parse_xml_invoice(b"<<not valid xml>>") is None
+        assert parse_xml_invoice(b"") is None
+
+    def test_parse_xml_missing_einvoice_data(self):
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        assert parse_xml_invoice(b"<Root><Other/></Root>") is None
+
+
+class TestXmlFormatDate:
+    def test_iso_date(self):
+        from fapiao_cn.parsers.xml_invoice import _format_date
+
+        assert _format_date("2025-11-21") == "2025-11-21"
+
+    def test_iso_date_with_time(self):
+        from fapiao_cn.parsers.xml_invoice import _format_date
+
+        assert _format_date("2026-06-02 09:38:41") == "2026-06-02"
+
+    def test_zero_padded_month(self):
+        from fapiao_cn.parsers.xml_invoice import _format_date
+
+        assert _format_date("2026-5-5") == "2026-05-05"
+
+    def test_empty(self):
+        from fapiao_cn.parsers.xml_invoice import _format_date
+
+        assert _format_date("") == ""
+
+    def test_invalid_format_unchanged(self):
+        from fapiao_cn.parsers.xml_invoice import _format_date
+
+        assert _format_date("not-a-date") == "not-a-date"
+
+
+class TestXmlDetectInvoiceType:
+    def test_special_vat(self):
+        import xml.etree.ElementTree as ET
+
+        from fapiao_cn.parsers.xml_invoice import _detect_invoice_type
+
+        root = ET.fromstring("""<EInvoice>
+          <Header><InherentLabel>
+            <EInvoiceType><LabelName>电子发票</LabelName></EInvoiceType>
+            <GeneralOrSpecialVAT><LabelName>增值税专用发票</LabelName></GeneralOrSpecialVAT>
+          </InherentLabel></Header>
+        </EInvoice>""")
+        assert _detect_invoice_type(root) == "电子发票（增值税专用发票）"
+
+    def test_common(self):
+        import xml.etree.ElementTree as ET
+
+        from fapiao_cn.parsers.xml_invoice import _detect_invoice_type
+
+        root = ET.fromstring("""<EInvoice>
+          <Header><InherentLabel>
+            <EInvoiceType><LabelName>电子发票</LabelName></EInvoiceType>
+            <GeneralOrSpecialVAT><LabelName>普通发票</LabelName></GeneralOrSpecialVAT>
+          </InherentLabel></Header>
+        </EInvoice>""")
+        assert _detect_invoice_type(root) == "电子发票（普通发票）"
+
+    def test_missing_inherent_label(self):
+        import xml.etree.ElementTree as ET
+
+        from fapiao_cn.parsers.xml_invoice import _detect_invoice_type
+
+        root = ET.fromstring("<EInvoice><Header/></EInvoice>")
+        assert _detect_invoice_type(root) == ""

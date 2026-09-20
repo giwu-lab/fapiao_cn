@@ -6,6 +6,48 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Breaking
+- `pdf_raw` field removed from `/extract`, `/extract/batch`, `/extract-and-verify`, and `parse_pdf()` response. Callers passing `?raw=true` on the regular endpoints will no longer receive a raw-text payload (the query parameter is silently ignored).
+
+### Added
+- `POST /raw` — dedicated endpoint returning only the PDF raw text payload (`text` / `lines` / `page_count`). XML inputs are rejected with `400 raw_unsupported: pdf_only`. Useful for debugging a PDF outside the parse pipeline.
+- `PdfRaw.message` field (default `"success"`), so the `/raw` endpoint can surface 422 errors via the `message` field just like `/extract`.
+- **API 鉴权** — 受保护端点（除 `/health`）需要 API Key
+  - Bearer Token / `X-API-Key` 双形式，按 `key_id` 维度限速
+  - Simple 模式：`FC_API_KEYS="k1,k2,k3"` 逗号分隔，全作用域
+  - JSON 模式：`FC_API_KEYS_FILE=...` 支持 `label` / `scopes` / `rpm` / `burst` 精细配置
+  - 作用域：`extract` / `verify` / `admin`（admin 为超集）
+  - 错误响应符合 RFC 6750：`WWW-Authenticate: Bearer realm="fapiao_cn", error="..."`
+  - 审计日志 `logs/audit.log`（10 MiB × 5 自动轮转）
+  - Dev 兜底：未配 key 时启动 WARN 仍放行（迁移友好）
+  - 双轨兼容开关 `FC_API_LEGACY_ALLOW`（仅迁移期使用）
+  - 25 条专项测试 (`tests/test_auth.py`)
+- **`fapiao_cn gen-key`** — dev 一键生成 API key（`secrets.token_urlsafe`，32-char base64）
+  - `--write-env` / `-w` 自动写入 `.env`；已存在 `FC_API_KEYS` 时不覆盖，仅提示手动合并
+  - 新建 `.env` 自动收紧到 `0600` 权限
+
+### Removed
+- **`fapiao_cn gen-key`** — CLI 子命令删除（功能过于狭窄，与 `openssl rand` 等价）
+  - 改用 `openssl rand -base64 24` + 手写 `.env` 即可
+  - 删 `tests/test_cli.py`（4 条测试随之移除）
+
+### Changed
+- PID file moved from `.fapiao_cn.pid` (project root) to `logs/fapiao_cn.pid` — keeps all runtime artefacts under the logs directory. `.gitignore`, `.dockerignore`, `scripts/install_portable.sh`, and `build-scripts/package_portable.py` updated accordingly.
+- `/extract`, `/extract-and-verify`, `/raw` HTTP 422 responses now return the full `ExtractResponse` / `PdfRaw` body with the complete error string in `message` (including the `error: ` prefix). Previously the error string was stripped of the prefix and stuffed into FastAPI's `{"detail": ...}` envelope, which contradicted the documented client contract. 400 / 500 / 502 / 503 behaviour unchanged — those still use `{"detail": ...}` since they correspond to request-structure errors or proxy errors, not parse errors.
+- LRU cache key simplified to `sha256(contents)[:32] : filename` (no more `with_raw` dimension). `ParseResultCache.get` / `put` signatures updated.
+- `formats.detect_format` is now public (renamed from `_detect_format`) so the `/raw` endpoint can reuse the format-sniffing logic.
+
+### Removed
+- **部署形态合并**：只保留 dev + Docker 两种部署方式
+  - 删 `parse_vevn/`（in-tree venv，~180 MiB）
+  - 删 `scripts/setup.sh` / `scripts/cli.sh` / `scripts/lint.sh`
+  - 删 `scripts/install_portable.sh` / `scripts/uninstall_systemd.sh` / `scripts/build-portable.sh`
+  - 删 `scripts/fapiao_cn.service.template` / `scripts/fapiao_cn.supervisor.conf`
+  - 删 `build-scripts/`（`package_portable.py` / `verify_portable.py`）
+  - 改 `README.md`：删 systemd / Supervisor / portable tarball 三段，TL;DR + 快速开始改为 Docker / dev 双形态
+  - 改 `pyproject.toml` / `.gitignore` / `.dockerignore`：去掉 `parse_vevn` 引用
+  - 改 `src/fapiao_cn/cli.py` docstring：去掉 cli.sh 引用，明确只面向 dev
+
 ## [1.0.0] - 2026-09-18
 
 ### Renamed

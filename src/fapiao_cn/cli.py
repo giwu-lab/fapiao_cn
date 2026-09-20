@@ -1,19 +1,15 @@
 """``fapiao_cn`` console script — lifecycle management for the HTTP service.
 
-Sub-commands mirror ``scripts/cli.sh`` so existing operator muscle
-memory keeps working:
-
-* ``fapiao_cn start``   — launch uvicorn in the background
-* ``fapiao_cn stop``    — kill the background process (PID file ``.fapiao_cn.pid``)
-* ``fapiao_cn restart`` — stop + start
-* ``fapiao_cn dev``     — foreground uvicorn with auto-reload
-* ``fapiao_cn test``    — run ``pytest``
-* ``fapiao_cn status``  — show whether the background process is alive
+* ``fapiao_cn start``    — launch uvicorn in the background
+* ``fapiao_cn stop``     — kill the background process (PID file ``logs/fapiao_cn.pid``)
+* ``fapiao_cn restart``  — stop + start
+* ``fapiao_cn dev``      — foreground uvicorn with auto-reload
+* ``fapiao_cn test``     — run ``pytest``
+* ``fapiao_cn status``   — show whether the background process is alive
 
 The control-script is meant for **developer / CI** usage where the venv
-is already installed (``pip install -e .``).  Offline deployments rely
-on :mod:`fapiao_cn.server` via ``python -m uvicorn fapiao_cn.server:app``
-instead — that path needs no console-script registration.
+is already installed (``pip install -e .``).  Production deployments use
+the Docker image (``docker compose up -d``).
 """
 
 from __future__ import annotations
@@ -28,9 +24,10 @@ from typing import List, Optional
 
 from fapiao_cn.config import settings
 
-PID_FILE = ".fapiao_cn.pid"
+PID_FILE = "logs/fapiao_cn.pid"
 LOG_DIR = "logs"
 LOG_FILE = "logs/server.log"
+LOG_CONFIG = "deploy/log_config.yaml"
 APP_TARGET = "fapiao_cn.server:app"
 
 
@@ -63,17 +60,23 @@ def cmd_start(args: argparse.Namespace) -> int:
         return 0
     Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
     log = open(LOG_FILE, "ab", buffering=0)
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        APP_TARGET,
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+    ]
+    # Use the same YAML log config as the Docker image so dev output
+    # carries timestamps and the audit logger is wired up.
+    log_config_path = Path(LOG_CONFIG)
+    if log_config_path.exists():
+        cmd.extend(["--log-config", str(log_config_path)])
     proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            APP_TARGET,
-            "--host",
-            args.host,
-            "--port",
-            str(args.port),
-        ],
+        cmd,
         stdout=log,
         stderr=subprocess.STDOUT,
         start_new_session=True,

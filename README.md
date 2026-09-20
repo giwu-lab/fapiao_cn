@@ -1,57 +1,115 @@
 # fapiao_cn
 
-电子发票字段提取服务（HTTP API）。基于 `pdfplumber`，无 JVM 依赖。
+中国电子发票字段提取服务（HTTP API + Python lib）。基于 `pdfplumber`，覆盖 6 类票种 + XML 全电发票，无 JVM 依赖。
 
-## 特点
+## 快速开始
 
-- **纯 Python** —— 无 JVM / PDFBox 依赖
-- **多页聚合** —— 金额末页优先、购销方首见优先
-- **覆盖 6 类解析器**：新电子格式（含京东/京东大药房/水费/通行费变体）、旧版、合并代码/成品油、航空运输行程单、铁路电子客票、中央非税收入统一票据
-- **坐标解析** —— 合并代码发票利用 `extract_words()` 坐标定位人名，避免文本行分割歧义
-- **字段去空格** —— 输出时自动清除所有字段中的空白字符
-- **XML 全电发票** —— 同时支持 PDF 与 XML 输入，输出 schema 一致
+```bash
+# 生产（推荐）
+docker compose up -d
+curl -F file=@samples/购_材料_01.pdf http://localhost:8091/extract
 
-## 项目结构
-
+# 本地开发
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+fapiao_cn-server --port 8091
 ```
-fapiao_cn/
-├── src/fapiao_cn/                # Python 包（src 布局）
-│   ├── cli.py                 # 控制台脚本 fapiao_cn 入口（test/start/stop/restart/...）
-│   ├── server.py             # 控制台脚本 fapiao_cn-server 入口 + create_app() 工厂
-│   ├── config.py             # Settings（pydantic-settings）
-│   ├── schemas.py            # InvoiceRecord, PdfRaw, ExtractResponse
-│   ├── pipeline.py           # PDF 文本清洗 + 多页调度 + 聚合
-│   ├── formats.py            # 顶层 parse_pdf 入口（XML/PDF 分发）
-│   ├── input.py              # HTTP 请求体解析
-│   ├── utils.py              # 通用正则 / 工具
-│   └── parsers/              # 各票种解析器（dispatch 收纳在 __init__.py）
-├── tests/                    # 211 条用例
-├── samples/                  # 24 PDF + 6 XML 样本
-├── scripts/                  # 运维脚本
-│   ├── setup.sh              # 创建 parse_vevn/ + pip install -e .
-│   ├── cli.sh                # start/stop/restart/test（开发用）
-│   ├── build-portable.sh     # 打 fapiao_cn-portable.tar.gz
-│   ├── install_portable.sh   # 离线目标机解压+启动（systemd / supervisor / nohup）
-│   ├── fapiao_cn.service.template# systemd unit 模板（被 install_portable.sh 渲染）
-│   ├── fapiao_cn.supervisor.conf # Supervisor program 模板（被 install_portable.sh 渲染）
-│   ├── uninstall_systemd.sh  # 清理 systemd 注册（保留 deployment 目录）
-│   └── lint.sh               # ruff 检查
-├── build-scripts/            # 发布相关 Python 脚本
-│   ├── package_portable.py   # 含 wheel 预下载 + 离线模拟安装 + 打包 + 清理
-│   └── verify_portable.py    # 解压并跑 /health 验证
-├── parse_vevn/               # in-tree venv（保留，便携部署核心）
-└── pyproject.toml            # hatchling 构建
+
+只支持两种部署形态：
+
+- **Docker（生产推荐）**：`docker compose up -d`，自带开机自启、崩溃重启、健康检查。
+- **dev（本地开发 / CI）**：venv + `pip install -e .` + 控制台脚本或裸 uvicorn。
+
+镜像特性：多阶段 `python:3.12-slim`、非 root、HEALTHCHECK 内置、`/app/logs` volume 挂载、时区 `Asia/Shanghai`、镜像 < 250 MB。
+
+国内网络可切镜像源：
+
+```bash
+docker build \
+  --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
+  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+  -t fapiao_cn:1.0.0 .
 ```
+
+### dev 模式
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+pip install pytest ruff mypy     # 可选：测试 / lint
+
+# 启动（任选一种）
+fapiao_cn start                  # 后台 + PID 文件（stop / restart / status / dev）
+fapiao_cn-server --port 8091     # 前台控制台脚本
+python -m uvicorn fapiao_cn.server:app --host 0.0.0.0 --port 8091
+
+# 测试 / lint
+fapiao_cn test                   # 等价 python -m pytest tests/ -v
+ruff check src tests
+mypy src/fapiao_cn
+```
+
+dev 模式默认需要 API Key（除 `/health`）。手动写入 `.env`：
+
+```bash
+# 生成随机 key 并写到 .env
+echo "FC_API_KEYS=\"sk_dev_$(openssl rand -base64 24 | tr -d '=' | tr '/+' '_-')\"" >> .env
+chmod 600 .env
+
+# 调用时带 key
+curl -H "Authorization: Bearer $(grep FC_API_KEYS .env | cut -d= -f2 | tr -d '\"')" \
+  http://localhost:8091/extract -F file=@samples/购_材料_01.pdf
+```
+
+详见「API 鉴权」章节。
+
+默认端口 `8091`，可用 `FC_PORT` 覆盖。Python 包直接调用：
+
+```python
+from fapiao_cn import parse_pdf
+resp = parse_pdf(open("samples/购_材料_01.pdf", "rb").read(), filename="购_材料_01.pdf")
+print(resp.seller_name, resp.total_amount, resp.message)
+```
+
+## API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/health` | Liveness probe（公开） |
+| GET | `/health/full` | Readiness probe + 依赖 / 缓存状态（需 `admin` scope） |
+| GET | `/formats` | 支持的全部票种 |
+| POST | `/extract` | 单文件提取 |
+| POST | `/extract/batch` | 批量提取（并行，按输入顺序返回） |
+| POST | `/raw` | 仅返回 PDF 原始文本，XML 拒绝 |
+| POST | `/verify` | 国税查验代理（需 `FC_VERIFY_ENABLED=true`） |
+| POST | `/extract-and-verify` | 提取 + 查验一站式 |
+
+`/extract`、`/extract/batch`、`/raw` 支持 `multipart/form-data`（`file` / `files` 字段）和 `application/json`（`file_path` / `file_base64` / `url`）两种入参：
+
+```bash
+# multipart
+curl -F "file=@samples/购_材料_01.pdf" http://localhost:8091/extract
+
+# JSON
+curl -H "Content-Type: application/json" \
+  -d '{"file_path": "samples/购_材料_01.pdf"}' \
+  http://localhost:8091/extract
+
+# /raw 响应
+# {"text": "...", "lines": ["..."], "page_count": 1}
+```
+
+`/extract/batch` 限制：最多 50 个文件、单文件 10 MB、总大小 500 MB。
 
 ## 输出字段
 
 ```json
 {
-  "file": "1.pdf",
+  "file": "购_材料_01.pdf",
   "page_count": 1,
   "invoice_type": "电子发票（增值税专用发票）",
   "invoice_number": "25502000000129241041",
-  "issue_date": "2025年11月27日",
+  "issue_date": "2025-11-27",
   "buyer_name": "...",
   "buyer_tax_id": "...",
   "seller_name": "...",
@@ -60,378 +118,143 @@ fapiao_cn/
   "tax_amount": "16122.43",
   "total_amount": "140141.09",
   "total_amount_upper": "壹拾肆万零壹佰肆拾壹圆零玖分",
-  "payee": "",
-  "reviewer": "",
-  "drawer": "李春梅"
+  "payee": "", "reviewer": "", "drawer": "李春梅",
+  "message": "success"
 }
 ```
 
-## 安装（开发 / 在线环境）
+### `message` 字段语义
+
+`message` 统一表示成功 / 软警告 / 硬错误：
+
+| 值 | HTTP | 含义 |
+| --- | --- | --- |
+| `"success"` | 200 | 成功 |
+| `"not_text"` | 200 | 空 PDF / 图片型 PDF 无文本层（软警告） |
+| `"error: empty_file"` | 422 | 上传为空 |
+| `"error: file_too_large: X > Y bytes"` | 422 | 超过大小限制 |
+| `"error: parse_failed: <exc>"` | 422 | pdfplumber 解析异常 |
+| `"error: xml_parse_failed: ..."` | 422 | XML 畸形 |
+| `"error: internal_error: <exc>"` | 500 | 服务器内部异常 |
+
+HTTP 422 响应体就是 `ExtractResponse` / `PdfRaw`，错误字符串完整保留在 `message` 字段。400 / 500 / 502-503 仍走 FastAPI 的 `{"detail": ...}` 信封。
+
+## 配置
+
+环境变量前缀 `FC_`，可通过 `.env` 或 `docker-compose.yml` 注入。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `FC_HOST` / `FC_PORT` | `0.0.0.0` / `8091` | 绑定地址 / 端口 |
+| `FC_CACHE_SIZE` | `128` | LRU 缓存条目数（`0` 关闭） |
+| `FC_BATCH_WORKERS` | `4` | `/extract/batch` 并行线程数 |
+| `FC_MAX_FILE_MB` | `32` | 单文件最大字节 |
+| `FC_MAX_BATCH_FILES` | `50` | 批量最大文件数 |
+| `FC_MAX_BATCH_SINGLE_MB` | `10` | 批量单文件大小 |
+| `FC_MAX_BATCH_TOTAL_MB` | `500` | 批量总大小 |
+| `FC_VERIFY_ENABLED` | `false` | 启用国税查验代理 |
+| `FC_VERIFY_ENDPOINT` | （空） | 国税代理 URL |
+| `FC_VERIFY_API_KEY` | （空） | 代理侧 Bearer token |
+| `FC_VERIFY_TIMEOUT` | `15` | 代理超时（秒） |
+| `FC_API_AUTH_ENABLED` | `true` | 鉴权总开关 |
+| `FC_API_KEYS` | （空） | 逗号分隔 API key（simple 模式，全作用域） |
+| `FC_API_KEYS_FILE` | （空） | JSON 文件路径（结构化模式） |
+| `FC_API_KEY_DEFAULT_RPM` | `60` | 默认每分钟请求上限 |
+| `FC_API_KEY_DEFAULT_BURST` | `10` | 默认令牌桶容量 |
+| `FC_API_LEGACY_ALLOW` | `false` | 双轨兼容：未带 token 也放行（仅迁移期） |
+
+## API 鉴权
+
+服务端点（除 `/health`）默认需要 API Key，Header 两种形式任选：
 
 ```bash
-# 方式 1：使用项目自带脚本创建 in-tree venv
-bash scripts/setup.sh
-
-# 方式 2：uv 同步（推荐）
-uv sync
-
-# 方式 3：手动创建 venv 后 pip install
-python3 -m venv parse_vevn
-source parse_vevn/bin/activate
-pip install -e .
-pip install pytest        # dev 依赖（仅测试需要）
+curl -H "Authorization: Bearer $FC_KEY" http://localhost:8091/extract -F file=@samples/购_材料_01.pdf
+curl -H "X-API-Key: $FC_KEY"            http://localhost:8091/extract -F file=@samples/购_材料_01.pdf
 ```
 
-`pip install -e .` 后会注册两个控制台脚本：
+### 配置 Key
 
-| 命令          | 作用                          |
-| ----------- | --------------------------- |
-| `fapiao_cn`      | CLI：test/start/stop/restart/dev |
-| `fapiao_cn-server` | 启动 uvicorn（前台）              |
-
-## 启动
+**Simple 模式**（推荐少量内网调用方）：
 
 ```bash
-# 方式 1：控制台脚本（venv 激活后）
-fapiao_cn start               # 后台启动 uvicorn
-fapiao_cn stop
-fapiao_cn restart
-fapiao_cn dev                 # 前台 + auto-reload
-fapiao_cn status
-
-# 方式 2：项目自带 shell 封装（自动激活 parse_vevn）
-bash scripts/cli.sh start [PORT]
-bash scripts/cli.sh stop
-bash scripts/cli.sh restart [PORT]
-bash scripts/cli.sh test
-bash scripts/cli.sh status
-
-# 方式 3：直接 uvicorn（生产 / 调试）
-python -m uvicorn fapiao_cn.server:app --host 0.0.0.0 --port 8091
-
-# 方式 4：fapiao_cn-server 控制台脚本
-fapiao_cn-server --host 0.0.0.0 --port 8091
+FC_API_KEYS="key-for-n8n,key-for-cli,key-for-frontend"
+# 每个 key 自动拥有 extract / verify / admin 全作用域，rpm=60 / burst=10
 ```
 
-默认端口 `8091`（可用 `PORT` / `FPAPI_PORT` 环境变量覆盖）。
+> ⚠️ **Simple 模式下所有 key 自动获得 admin scope**（含 `/health/full`）。
+> 多调用方场景建议改用 JSON 模式，给不同 key 分发不同 scopes。
+> 「simple 模式 = 全员 admin」是显式设计，**生产部署前必须评估**。
 
-### Supervisor 守护（无 systemd 环境）
-
-适合不支持 systemd 的发行版（CentOS 6、部分精简容器镜像）或不便写 `/etc/systemd/system` 的部署。
+**JSON 模式**（多租户 / 精细控制，推荐生产）：
 
 ```bash
-bash scripts/install_portable.sh --supervisor              # 解压 + 渲染 + supervisorctl update
-bash scripts/install_portable.sh --supervisor /opt/fapiao_cn  # 自定义 DEST_DIR
+FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 ```
 
-执行后会在 `/etc/supervisor/conf.d/fapiao_cn.conf` 写入 program 定义；Supervisor 守护 + 崩溃自启（与 `fapiao_cn.service` 二选一，不要并存）。
-
-常用命令：
-
-```bash
-supervisorctl status fapiao_cn      # 状态
-supervisorctl restart fapiao_cn     # 重启
-supervisorctl tail -f fapiao_cn     # stdout 实时日志
-supervisorctl tail -f fapiao_cn stderr  # stderr 实时日志
-
-# 调整 host/port：编辑 /etc/supervisor/conf.d/fapiao_cn.conf 的 environment= 行
-supervisorctl reread && supervisorctl update fapiao_cn
+```json
+[
+  {"key": "sk_live_abc...",  "label": "n8n-prod",    "scopes": ["extract"], "rpm": 30, "burst": 5},
+  {"key": "sk_live_def...",  "label": "ops-verify", "scopes": ["extract", "verify"], "rpm": 120, "burst": 20},
+  {"key": "sk_admin_xyz...", "label": "ops-admin",  "scopes": ["extract", "verify", "admin"]}
+]
 ```
 
-未安装 supervisor 时提示安装命令：
+字段：`key`（≥ 32 字节随机串，`openssl rand -base64 32`）/ `label`（写审计日志）/ `scopes`（`admin` 自动获得其他所有）/ `rpm` / `burst`。
 
-```bash
-# Debian/Ubuntu
-sudo apt install supervisor
-# RHEL/CentOS
-sudo yum install supervisor
-# pip（任意发行版）
-sudo pip install supervisor
+### Scope → 端点
+
+| Scope | 端点 |
+| --- | --- |
+| `extract` | `/extract`、`/extract/batch`、`/raw`、`/extract-and-verify`、`/formats` |
+| `verify` | `/verify` |
+| `admin` | `/health/full`（超集，含 extract / verify） |
+
+### 错误码
+
+| 状态 | 触发 | Header |
+| --- | --- | --- |
+| 401 | 缺 token / token 错 | `WWW-Authenticate: Bearer realm="fapiao_cn", error="invalid_token"` |
+| 403 | scope 不足 | `WWW-Authenticate: Bearer realm="fapiao_cn", error="insufficient_scope"` |
+| 429 | 限速 | `Retry-After: <sec>` + `WWW-Authenticate: ... error="rate_limited"` |
+
+`/health` 始终公开，不消耗配额。`FC_API_KEYS` 与 `FC_API_KEYS_FILE` 都为空 → 启动 WARN + 全量放行（dev 兜底，**生产前必须显式配置**）。
+
+### 审计日志
+
+所有受保护请求（无论成功/失败）写入 `logs/audit.log`（10 MiB × 5 自动轮转）：
+
+```
+2026-09-18 10:23:45 [AUDIT] POST /extract -> 200 (42ms) key=a1b2c3d4 label=n8n-prod from=10.0.0.7 in=1258291B out=1834B
+2026-09-18 10:23:46 [AUDIT] GET /formats -> 401 (0ms) key=- label=- from=10.0.0.7 in=0B out=0B reason=missing_token
 ```
 
-## API
+`key_id` 是 `sha256(key)[:8]`，原 key 不落盘。Docker / K8s secret 用 mount 文件路径即可，**镜像不包含任何 key**：
 
-| 方法   | 路径                    | 说明                                       |
-| ---- | --------------------- | ---------------------------------------- |
-| GET  | `/health`             | Liveness probe — 进程存活即可            |
-| GET  | `/health/full`        | Readiness probe — 依赖检查 + cache 状态       |
-| GET  | `/formats`            | 返回支持的全部票种列表                            |
-| POST | `/extract`            | 提取发票字段（单文件）                            |
-| POST | `/extract/batch`      | 批量提取（多文件，并行解析，按输入顺序返回）                |
-| POST | `/verify`             | 国家税务总局查验代理（需 `FC_VERIFY_ENABLED=true`） |
-| POST | `/extract-and-verify` | 一站式：提取 + 查验                               |
-
-### 性能与环境变量（v1.0.0）
-
-所有环境变量前缀为 `FC_`（如 `FC_PORT`、`FC_CACHE_SIZE`），可通过 `.env` 文件或 `docker-compose.yml` 注入。
-
-| 变量                          | 默认值     | 说明                                       |
-| --------------------------- | ------- | ---------------------------------------- |
-| `FC_HOST`                   | `0.0.0.0` | 绑定地址                                     |
-| `FC_PORT`                   | `8091`  | 绑定端口                                     |
-| `FC_CACHE_SIZE`             | `128`   | LRU 缓存条目数；`0` 关闭                          |
-| `FC_BATCH_WORKERS`          | `4`     | `/extract/batch` 并行线程数                    |
-| `FC_VERIFY_ENABLED`         | `false` | 是否启用国税查验代理                               |
-| `FC_VERIFY_ENDPOINT`        | (空)     | 国税代理 URL（如 `http://internal-verify/...`）   |
-| `FC_VERIFY_API_KEY`         | (空)     | Bearer token（可选）                        |
-| `FC_VERIFY_TIMEOUT`         | `15`    | 国税代理超时（秒）                                |
-| `FC_MAX_FILE_MB`            | `32`    | 单文件最大字节                                  |
-| `FC_MAX_BATCH_FILES`        | `50`    | 批量请求最大文件数                                |
-| `FC_MAX_BATCH_TOTAL_MB`     | `500`   | 批量请求总大小                                  |
-| `FC_MAX_BATCH_SINGLE_MB`    | `10`    | 批量请求中单文件大小                                |
-
-### `/extract` 请求方式
-
-**multipart/form-data**（文件上传）：
-
-```bash
-curl -X POST http://127.0.0.1:8091/extract -F "file=@samples/购_材料_01.pdf"
+```yaml
+# docker-compose.yml
+volumes:
+  - /etc/fapiao_cn/keys.json:/app/keys.json:ro
+environment:
+  FC_API_KEYS_FILE: /app/keys.json
 ```
-
-**application/json**（文件路径、Base64 或 URL）：
-
-```bash
-curl -X POST http://127.0.0.1:8091/extract \
-  -H "Content-Type: application/json" \
-  -d '{"file_path": "samples/购_材料_01.pdf"}'
-curl -X POST http://127.0.0.1:8091/extract \
-  -H "Content-Type: application/json" \
-  -d '{"file_base64": "...base64..."}'
-curl -X POST http://127.0.0.1:8091/extract \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/invoice.pdf"}'
-```
-
-**返回原始文本**：
-
-```bash
-curl -X POST 'http://127.0.0.1:8091/extract?raw=true' -F "file=@samples/购_材料_01.pdf"
-```
-
-### `/extract/batch` 批量提取
-
-同时支持 `multipart/form-data` 和 `application/json`。
-
-**multipart**（字段 `files` 可重复）：
-
-```bash
-curl -X POST http://127.0.0.1:8091/extract/batch \
-  -F "files=@samples/火车票01.pdf" \
-  -F "files=@samples/火车票02.pdf"
-```
-
-**JSON**（n8n / 前端友好）：
-
-```bash
-curl -X POST http://127.0.0.1:8091/extract/batch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "files": [
-      {"filename": "火车票01.pdf", "base64": "..."},
-      {"filename": "火车票02.pdf", "base64": "..."}
-    ]
-  }'
-```
-
-返回 `List[ExtractResponse]`，每个元素对应一个文件。单个文件解析失败时，对应项的 `error` 字段会包含错误信息，其余文件不受影响。
-
-**限制**：
-
-- 最多 50 个文件
-- 单个文件最大 10 MB
-- 总大小最大 500 MB
-
-### 错误响应
-
-| 状态码   | 说明                                       |
-| ----- | ---------------------------------------- |
-| 400   | 缺少 `file` / `file_path` / `file_base64` / `files` |
-| 422   | 内容无法解析（单文件）                             |
-| 500   | 内部错误                                     |
-
-## 解析器
-
-| 模块                              | 匹配类型                       |
-| ------------------------------- | -------------------------- |
-| `src/fapiao_cn/parsers/invoice.py`      | 新电子发票（标准双栏、京东、水费、通行费变体）     |
-| `src/fapiao_cn/parsers/old_invoice.py`  | 旧版电子发票（含密码区、校验码）            |
-| `src/fapiao_cn/parsers/merged_code.py`  | 合并代码/成品油（坐标解析人名）            |
-| `src/fapiao_cn/parsers/airline_ticket.py` | 航空运输电子客票行程单                 |
-| `src/fapiao_cn/parsers/train_ticket.py`  | 铁路电子客票                     |
-| `src/fapiao_cn/parsers/non_tax_receipt.py` | 中央非税收入统一票据（专利年费等）          |
-| `src/fapiao_cn/parsers/xml_invoice.py`   | XML 全电发票                   |
 
 ## 测试
 
 ```bash
-fapiao_cn test                            # 通过控制台脚本
-bash scripts/cli.sh test             # 通过 shell 封装
-python -m pytest tests/ -v           # 直接 pytest
+fapiao_cn test                              # 控制台脚本
+python -m pytest tests/ -v                  # 直接 pytest
 ```
 
-测试覆盖 `samples/` 下 30 个样本（24 PDF + 6 XML），涵盖所有已支持的票种和变体。
+235 条用例覆盖 `samples/` 下 34 个样本（29 PDF + 5 XML）。
 
-## 离线部署（无网络目标机）
+## 解析器
 
-源机器先构建自包含的 portable 包（含预下载的离线 wheel + `parse_vevn/`），拷贝到目标机解压即跑。
-
-### 源机器（在线）
-
-```bash
-# 1. 创建 in-tree venv，装 fapiao_cn（editable）
-bash scripts/setup.sh
-
-# 2. 跑通测试
-fapiao_cn test
-
-# 3. 打 portable 包（含 wheel 预下载 + 离线模拟安装 + 打包 + 清理）
-bash scripts/build-portable.sh
-
-# 4. （可选）本地验证 portable 包
-python build-scripts/verify_portable.py
-```
-
-`build-portable.sh` 内部会：
-
-1. 把所有运行时依赖 + fapiao_cn 自身 wheel 下载到 `./wheels/`（临时）
-2. 创建一次性 venv，用 `pip install --no-index --find-links=./wheels/ -e .` 模拟离线安装
-3. 在该离线 venv 中跑 `/health` smoke test
-4. 打 tarball `fapiao_cn-portable.tar.gz`（包含源码 + `samples/` + `parse_vevn/` + `scripts/install_portable.sh`）
-5. 删除 `./wheels/` 与模拟 venv（`--keep-wheels` 可保留）
-
-产物：仓库根 `fapiao_cn-portable.tar.gz`（约 40 MiB，含 venv）。
-
-### 目标机（无网络）
-
-**前提**：目标机 **Linux x86_64** + **Python 3.10+**（与源机器一致）。
-
-传输这 3 个文件到目标机同目录：
-
-```
-fapiao_cn-portable.tar.gz
-scripts/install_portable.sh
-scripts/fapiao_cn.service.template   # 仅 systemd 模式需要
-scripts/uninstall_systemd.sh     # 仅 systemd 模式需要
-```
-
-然后启动安装脚本（**交互式**会问 systemd 还是 nohup）：
-
-```bash
-bash scripts/install_portable.sh [DEST_DIR]         # 默认 /opt/fapiao_cn
-# 或非交互：
-bash scripts/install_portable.sh --systemd [DEST_DIR]
-bash scripts/install_portable.sh --nohup   [DEST_DIR]
-```
-
-`install_portable.sh` 内部：
-
-1. 解压 tarball 到 `DEST_DIR`
-2. 自检 `./parse_vevn/bin/python -c "import fapiao_cn"` —— 若 venv 中无 fapiao_cn 则报错终止
-3. 选择启动器（systemd / nohup）：
-   - **systemd**：需 root；自动创建 `fapiao_cn` 系统用户、写入 `/etc/systemd/system/fapiao_cn.service`、`enable --now`；日志走 journald
-   - **nohup**：后台启动，写 `.uvicorn.pid`、日志到 `logs/server.log`
-
-#### systemd 模式详情
-
-适合长期运行的生产机：开机自启、崩溃自动重启、`Restart=always`、`StandardOutput=journal`、最小权限（`NoNewPrivileges`、`ProtectSystem=strict`、`PrivateTmp`）。
-
-```bash
-# 查看状态
-systemctl status fapiao_cn
-# 看实时日志journalctl -u fapiao_cn -f
-# 改端口：编辑 /opt/fapiao_cn/fapiao_cn.env（FC_PORT=18091），systemctl restart fapiao_cn
-# 卸载 systemd 注册（保留 deployment 目录）：
-sudo bash scripts/uninstall_systemd.sh [/opt/fapiao_cn]
-```
-
-#### nohup 模式详情
-
-适合临时测试、容器内、或不想动 systemd 的环境：
-
-```bash
-cd /opt/fapiao_cn
-# 停止
-kill $(cat .uvicorn.pid)
-# 改端口
-kill $(cat .uvicorn.pid) 2>/dev/null
-PORT=18091 nohup ./parse_vevn/bin/python -m uvicorn fapiao_cn.server:app \
-  --host 0.0.0.0 --port 18091 > logs/server.log 2>&1 &
-echo $! > .uvicorn.pid
-```
-
-#### 验证
-
-```bash
-curl -fsS http://localhost:8091/health
-# 期望：{"status":"ok"}
-
-curl -fsS http://localhost:8091/extract \
-  -H "Content-Type: application/json" \
-  -d '{"file_path":"/opt/fapiao_cn/samples/购_材料_01.pdf"}'
-```
-
-### 仅 Python 包使用（不部署 HTTP 服务）
-
-```bash
-pip install fapiao_cn
-python -c "
-from fapiao_cn import parse_pdf, settings
-print('host:', settings.host, 'port:', settings.port)
-resp = parse_pdf(open('samples/购_材料_01.pdf', 'rb').read(), filename='购_材料_01.pdf')
-print(resp.seller_name, resp.total_amount)
-"
-```
-## Docker 部署
-
-```bash
-# 构建 + 启动（后台）
-docker compose up -d
-
-# 验证
-curl -fsS http://localhost:8091/health
-curl -fsS http://localhost:8091/health/full | jq
-
-# 配置国税查验（在 .env 里）
-echo "FC_VERIFY_ENABLED=true" >> .env
-echo "FC_VERIFY_ENDPOINT=http://your-proxy/verify" >> .env
-docker compose restart
-```
-
-国内网络可切换 apt + PyPI 镜像源（默认阿里云）：
-
-```bash
-# 默认：阿里云 apt + PyPI 镜像源（无需显式传参）
-docker build -t fapiao_cn:1.0.0 .
-
-# 切到清华 TUNA（apt + PyPI 一起切）
-docker build \
-  --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
-  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-  -t fapiao_cn:1.0.0 .
-
-# 关闭（恢复官方源，海外/CI 环境）
-docker build \
-  --build-arg APT_MIRROR= \
-  --build-arg PIP_INDEX_URL= \
-  -t fapiao_cn:1.0.0 .
-```
-
-镜像特性：
-- 多阶段构建（`python:3.12-slim`），最终镜像 < 250 MB
-- 非 root 运行（`fapiao_cn` 用户）
-- 内置 `HEALTHCHECK`（30s 间隔，`/health` 端点）
-- `/app/logs` 通过 volume 挂载到宿主机
-
-容器内日志会双写到：
-- **宿主 `./logs/server.log`**（volume 挂载，可 `tail -f`）
-- **`docker logs fapiao_cn`**（stdout/stderr，由 json-file 收集，10m × 3 自动轮转）
-
-时区：`Asia/Shanghai`（UTC+8，容器内装 `tzdata` 包）。格式 `YYYY-MM-DD HH:MM:SS,mmm [LEVEL] message`，参考：
-
-```
-2026-09-09 11:37:28,006 [INFO] Started server process [1]
-2026-09-09 11:37:28,006 [INFO] Waiting for application startup.
-2026-09-09 11:37:28,006 [INFO] Application startup complete.
-2026-09-09 11:37:28,006 [INFO] Uvicorn running on http://0.0.0.0:8091
-2026-09-09 11:37:29,015 [INFO] 127.0.0.1:54321 - "GET /health HTTP/1.1" 200 OK
-```
+| 模块 | 匹配类型 |
+| --- | --- |
+| `parsers/invoice.py` | 新电子发票（标准双栏、京东、京东大药房、水费、通行费变体） |
+| `parsers/old_invoice.py` | 旧版电子发票（含密码区、校验码） |
+| `parsers/merged_code.py` | 合并代码 / 成品油（坐标解析人名） |
+| `parsers/airline_ticket.py` | 航空运输电子客票行程单 |
+| `parsers/train_ticket.py` | 铁路电子客票 |
+| `parsers/non_tax_receipt.py` | 中央非税收入统一票据（专利年费等） |
+| `parsers/xml_invoice.py` | XML 全电发票 |

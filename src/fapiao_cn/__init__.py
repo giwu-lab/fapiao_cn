@@ -1,7 +1,7 @@
 """fapiao_cn — electronic invoice field extractor (PDF + XML).
 
 Public API:
-    parse_pdf(contents, filename, with_raw=False) -> ExtractResponse
+    parse_pdf(contents, filename="") -> ExtractResponse
     InvoiceRecord, PdfRaw, ExtractResponse        — data models
     Settings, settings                            — configuration
 

@@ -1,8 +1,8 @@
 """LRU cache for parsed ``ExtractResponse``s.
 
-Caching is keyed on ``sha256(contents)[:32] : filename : with_raw`` so
-the same bytes always hit the same entry regardless of which request
-uploaded them first.
+Caching is keyed on ``sha256(contents)[:32] : filename`` so the same
+bytes always hit the same entry regardless of which request uploaded
+them first.
 
 The cache is intentionally bounded (default 128 entries) — see
 ``Settings.cache_size``.  Setting ``FC_CACHE_SIZE=0`` disables it.
@@ -33,14 +33,14 @@ class ParseResultCache:
         self.misses = 0
 
     @staticmethod
-    def _key(contents: bytes, filename: str, with_raw: bool) -> str:
+    def _key(contents: bytes, filename: str) -> str:
         h = hashlib.sha256(contents).hexdigest()[:32]
-        return f"{h}:{filename}:{with_raw}"
+        return f"{h}:{filename}"
 
-    def get(self, contents: bytes, filename: str, with_raw: bool) -> Optional[object]:
+    def get(self, contents: bytes, filename: str) -> Optional[object]:
         if self._capacity == 0:
             return None
-        key = self._key(contents, filename, with_raw)
+        key = self._key(contents, filename)
         with self._lock:
             if key in self._data:
                 self.hits += 1
@@ -49,10 +49,10 @@ class ParseResultCache:
             self.misses += 1
             return None
 
-    def put(self, contents: bytes, filename: str, with_raw: bool, value: object) -> None:
+    def put(self, contents: bytes, filename: str, value: object) -> None:
         if self._capacity == 0:
             return
-        key = self._key(contents, filename, with_raw)
+        key = self._key(contents, filename)
         with self._lock:
             self._data[key] = value
             self._data.move_to_end(key)

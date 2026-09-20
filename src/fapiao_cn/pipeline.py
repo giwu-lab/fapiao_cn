@@ -44,8 +44,8 @@ _RE_REPEAT_CJK = re.compile(r"([\u4e00-\u9fff\uff00-\uffef])\1{2,}")
 @dataclass
 class ParseResult:
     record: InvoiceRecord
-    pdf_raw: Optional[PdfRaw]
-    warnings: List[str]
+    pdf_raw: PdfRaw
+    message: str = "success"
 
 
 class PageView:
@@ -114,11 +114,11 @@ def _load_pages(contents: bytes) -> List[PageView]:
 
 def run(contents: bytes, *, with_raw: bool = False) -> ParseResult:
     pages = _load_pages(contents)
-    if not pages:
+    if not pages or all(not p.text for p in pages):
         return ParseResult(
             record=InvoiceRecord(),
-            pdf_raw=PdfRaw(text="", lines=[], page_count=0) if with_raw else None,
-            warnings=["empty_pdf"],
+            pdf_raw=PdfRaw(text="", lines=[], page_count=len(pages)),
+            message="not_text",
         )
 
     parser_name, parser_func = dispatch(pages[0].text)
@@ -133,7 +133,7 @@ def run(contents: bytes, *, with_raw: bool = False) -> ParseResult:
 
     record = _aggregate(per_page_records, file_label="", page_count=len(pages))
 
-    pdf_raw: Optional[PdfRaw] = None
+    pdf_raw = PdfRaw()
     if with_raw:
         all_texts = "\n".join(p.text for p in pages)
         pdf_raw = PdfRaw(
@@ -142,7 +142,7 @@ def run(contents: bytes, *, with_raw: bool = False) -> ParseResult:
             page_count=len(pages),
         )
 
-    return ParseResult(record=record, pdf_raw=pdf_raw, warnings=[])
+    return ParseResult(record=record, pdf_raw=pdf_raw, message="success")
 
 
 def _aggregate(records: list, file_label: str, page_count: int) -> InvoiceRecord:

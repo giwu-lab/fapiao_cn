@@ -7,7 +7,7 @@ inputs; downstream consumers parse one shape regardless of source.
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import List
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +49,7 @@ class PdfRaw(BaseModel):
     text: str = ""
     lines: List[str] = Field(default_factory=list)
     page_count: int = 0
+    message: str = "success"
 
 
 class ExtractResponse(BaseModel):
@@ -68,6 +69,4 @@ class ExtractResponse(BaseModel):
     payee: str = ""
     reviewer: str = ""
     drawer: str = ""
-    pdf_raw: Optional[PdfRaw] = None
-    warnings: List[str] = Field(default_factory=list)
-    error: Optional[str] = None
+    message: str = "success"

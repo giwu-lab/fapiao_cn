@@ -40,5 +40,25 @@ class Settings(BaseSettings):
     verify_api_key: str = ""
     verify_timeout: int = 15
 
+    # CORS — allow browser frontends (e.g. barda at :3000) to call this API
+    cors_allow_origins: str = "*"            # CSV; default * for zero-config deployment
+    cors_allow_methods: str = "GET,POST,OPTIONS"
+    cors_allow_headers: str = "Content-Type,Authorization"
+
+    # API 鉴权 (FC_API_*)
+    # 双轨模式：
+    #   - FC_API_KEYS 优先（逗号分隔，简单模式，全部为 extract 作用域，用默认 rpm/burst）
+    #   - 否则读 FC_API_KEYS_FILE 指向的 JSON 文件（结构化模式，可配 label/scopes/rpm/burst）
+    #   - 两值都空 + api_auth_enabled=True → 启动 WARN，仍放行所有请求（dev 友好）
+    #   - 两值都空 + api_auth_enabled=False → 显式关闭鉴权
+    # 鉴权失败统一返回 401/403/429 并携带 RFC 6750 标准 WWW-Authenticate 头。
+    api_auth_enabled: bool = True
+    api_keys: str = ""
+    api_keys_file: str = ""
+    api_key_default_rpm: int = 60
+    api_key_default_burst: int = 10
+    # 双轨兼容：未带 token 的旧调用方是否放行（仅在 key 已配置时生效）；默认 false
+    api_legacy_allow: bool = False
+
 
 settings = Settings()

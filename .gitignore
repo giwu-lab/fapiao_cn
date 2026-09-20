@@ -28,7 +28,6 @@ htmlcov/
 dmypy.json
 
 # Virtual environments
-parse_vevn/
 .venv/
 venv/
 env/
@@ -38,8 +37,15 @@ logs/
 *.log
 server.log
 
+# Local environment / secrets (never commit real API keys)
+.env
+
+# Real-world invoice samples (contain sensitive buyer/seller data);
+# only the public test fixtures under tests/ are committed.
+samples/
+
 # Runtime / deployment artefacts
-.fapiao_cn.pid
+logs/fapiao_cn.pid
 
 # Editor / OS
 .DS_Store
