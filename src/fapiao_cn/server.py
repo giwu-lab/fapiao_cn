@@ -11,19 +11,25 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import signal
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Awaitable, Callable, MutableMapping, Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pdfplumber.utils.exceptions import PdfminerException
-from starlette.middleware.base import BaseHTTPMiddleware
 
-from fapiao_cn.auth import KeyStoreError, audit_log, auth_required, get_key_store
+from fapiao_cn.auth import (
+    KeyStoreError,
+    audit_log,
+    auth_required,
+    get_key_store,
+    reload_key_store,
+)
 from fapiao_cn.cache import get_cache
 from fapiao_cn.config import settings
 from fapiao_cn.formats import detect_format, parse_pdf
@@ -88,6 +94,93 @@ def _parse_one(contents: bytes, filename: str) -> ExtractResponse:
 _START_TIME = time.time()
 
 
+# ── Pure-ASGI audit middleware (H5) ───────────────────────────────
+# We intentionally avoid Starlette's BaseHTTPMiddleware because it has
+# known issues with streaming responses and re-entrancy.  This wrapper
+# captures the response status + headers via a custom ``send`` callable
+# without buffering the body, so JSONResponse / StreamingResponse / SSE
+# all flow through unchanged.
+class _AuditMiddleware:
+    def __init__(
+        self,
+        app: Callable[
+            [MutableMapping[str, object], Callable, Callable], Awaitable[None]
+        ],
+    ) -> None:
+        self.app = app
+
+    async def __call__(
+        self,
+        scope: MutableMapping[str, object],
+        receive: Callable[[], Awaitable[MutableMapping[str, object]]],
+        send: Callable[[MutableMapping[str, object]], Awaitable[None]],
+    ) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        started = time.monotonic()
+        status_holder: dict[str, int] = {"code": 500}
+        response_headers: list = []
+
+        async def _send(message: MutableMapping[str, object]) -> None:
+            if message["type"] == "http.response.start":
+                status = message.get("status", 500)
+                status_holder["code"] = int(status) if isinstance(status, int) else 500
+                raw_headers = message.get("headers") or []
+                response_headers.extend(list(raw_headers) if isinstance(raw_headers, list) else [])
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            path_raw = scope.get("path", "?")
+            method_raw = scope.get("method", "?")
+            path = str(path_raw)
+            method = str(method_raw)
+            state = scope.setdefault("state", {})
+            # Starlette's Request.state proxies writes to this same dict,
+            # so auth_required()'s ``request.state.auth_key_id = …`` flows
+            # through here as a dict write.
+            key_id = state.get("auth_key_id") if isinstance(state, dict) else None
+            label = state.get("auth_label") if isinstance(state, dict) else None
+            reason = state.get("auth_reason") if isinstance(state, dict) else None
+            if reason is None:
+                reason = "public" if path == "/health" else "anonymous"
+            client_obj = scope.get("client")
+            client_str = client_obj[0] if client_obj else "?"  # type: ignore[index]
+            bytes_in = -1
+            raw_headers = scope.get("headers")
+            if isinstance(raw_headers, list):
+                for hk, hv in raw_headers:
+                    if hk == b"content-length":
+                        try:
+                            bytes_in = int(hv)
+                        except ValueError:
+                            bytes_in = -1
+                        break
+            bytes_out = -1
+            for hk, hv in response_headers:
+                if hk == b"content-length":
+                    try:
+                        bytes_out = int(hv)
+                    except ValueError:
+                        bytes_out = -1
+                    break
+            audit_log(
+                method=method,
+                path=path,
+                status=status_holder["code"],
+                duration_ms=int((time.monotonic() - started) * 1000),
+                client=client_str,
+                key_id=key_id,
+                label=label,
+                bytes_in=bytes_in,
+                bytes_out=bytes_out,
+                reason=reason,
+            )
+
+
 def create_app() -> FastAPI:
     """Return a freshly-constructed ``FastAPI`` instance.
 
@@ -98,16 +191,44 @@ def create_app() -> FastAPI:
     启动期预加载 :class:`KeyStore`。如果 ``FC_API_KEYS_FILE`` 配置了但加载失败
     （文件不可读 / JSON 语法错 / 0 有效 key / 类型错误），**启动失败**——绝不能
     静默回退到 dev 兜底，否则 K8s Secret 没挂上时鉴权会全部消失（H2）。
+
+    H10/H39/H47：KeyStore 校验在工厂构造时立即触发，违反时直接抛 KeyStoreError，
+    uvicorn 启动期就会失败，不会等到第一个请求。
     """
+
+    try:
+        get_key_store()
+    except KeyStoreError as exc:
+        log.error("API key store failed to load; refusing to start: %s", exc)
+        raise
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
+        # Register SIGHUP for hot-reloading KeyStore (H6).
+        loop = asyncio.get_running_loop()
+
+        def _reload_on_sighup() -> None:
+            try:
+                fresh = reload_key_store()
+                log.info(
+                    "SIGHUP received; reloaded %d API keys (source=%s, disabled=%s)",
+                    len(fresh),
+                    fresh.source,
+                    fresh.disabled,
+                )
+            except KeyStoreError as exc:
+                log.error("SIGHUP reload failed: %s", exc)
+
         try:
-            get_key_store()
-        except KeyStoreError:
-            log.exception("API key store failed to load; refusing to start")
-            raise
+            loop.add_signal_handler(signal.SIGHUP, _reload_on_sighup)
+        except (NotImplementedError, RuntimeError):
+            # Windows / non-main thread — silently skip.
+            pass
         yield
+        try:
+            loop.remove_signal_handler(signal.SIGHUP)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
 
     app = FastAPI(title=settings.title, version=settings.version, lifespan=_lifespan)
 
@@ -123,6 +244,9 @@ def create_app() -> FastAPI:
     _allow_headers = [
         h.strip() for h in settings.cors_allow_headers.split(",") if h.strip()
     ]
+    # Add audit middleware last so it wraps everything (incl. CORS).
+    # FastAPI applies middlewares in reverse-add order, so the outermost
+    # wrapper is the *last* one added.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_allow_origins,
@@ -130,34 +254,6 @@ def create_app() -> FastAPI:
         allow_methods=_allow_methods,
         allow_headers=_allow_headers,
     )
-
-    # Audit middleware — 统一记审计日志（200 / 401 / 403 / 429 / 4xx / 5xx）。
-    # auth_required 在 request.state 上挂 auth_key_id / auth_label / auth_reason，
-    # 这里负责把所有结果统一落盘（避免重复记录 + 保证 schema 一致）。
-    class _AuditMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request, call_next):
-            started = time.monotonic()
-            response = await call_next(request)
-            key_id = getattr(request.state, "auth_key_id", None)
-            label = getattr(request.state, "auth_label", None)
-            reason = getattr(request.state, "auth_reason", None)
-            if reason is None:
-                # 无 auth_required 介入（典型：/health 公开） → 标记 public
-                reason = "public" if request.url.path == "/health" else "anonymous"
-            audit_log(
-                method=request.method,
-                path=request.url.path,
-                status=response.status_code,
-                duration_ms=int((time.monotonic() - started) * 1000),
-                client=request.client.host if request.client else "?",
-                key_id=key_id,
-                label=label,
-                bytes_in=int(request.headers.get("content-length") or 0),
-                bytes_out=int(response.headers.get("content-length") or 0),
-                reason=reason,
-            )
-            return response
-
     app.add_middleware(_AuditMiddleware)
 
     @app.get("/health")

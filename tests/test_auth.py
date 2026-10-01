@@ -154,15 +154,48 @@ class TestKeyStoreDisabled:
         settings.api_keys = ""
         settings.api_keys_file = ""
         settings.api_auth_enabled = True
+        settings.require_configured_keys = False
         reset_key_store_for_tests()
         store = KeyStore.from_env()
         assert store.disabled
 
     def test_explicit_disable(self):
         settings.api_auth_enabled = False
+        settings.require_configured_keys = False
         reset_key_store_for_tests()
         store = KeyStore.from_env()
         assert store.disabled
+
+    def test_require_configured_keys_blocks_dev_fallback(self):
+        """H10: empty config + require_configured_keys=True → KeyStoreError."""
+        from fapiao_cn.auth.keys import KeyStoreError
+
+        settings.api_keys = ""
+        settings.api_keys_file = ""
+        settings.api_auth_enabled = True
+        settings.require_configured_keys = True
+        reset_key_store_for_tests()
+        with pytest.raises(KeyStoreError, match="FC_REQUIRE"):
+            KeyStore.from_env()
+
+
+class TestKeyStoreReload:
+    """H6: SIGHUP-style reloading must rebuild the singleton."""
+
+    def test_reload_re_reads_env(self, tmp_path, monkeypatch):
+        from fapiao_cn.auth.keys import reload_key_store
+
+        for k, v in {"api_keys": "k1,k2", "api_keys_file": ""}.items():
+            monkeypatch.setattr(settings, k, v)
+        monkeypatch.setattr(settings, "require_configured_keys", False)
+        reset_key_store_for_tests()
+        a = reload_key_store()
+        assert len(a) == 2
+        for k, v in {"api_keys": "k3,k4", "api_keys_file": ""}.items():
+            monkeypatch.setattr(settings, k, v)
+        b = reload_key_store()
+        assert len(b) == 2
+        assert {r.key for r in a._records.values()} != {r.key for r in b._records.values()}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -178,6 +211,7 @@ def unauth_client():
     settings.api_keys = ""
     settings.api_keys_file = ""
     settings.api_legacy_allow = False
+    settings.require_configured_keys = False
     reset_key_store_for_tests()
     reset_rate_limiter_for_tests()
     return TestClient(app)

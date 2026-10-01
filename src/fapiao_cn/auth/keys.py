@@ -134,6 +134,13 @@ class KeyStore:
             return cls._from_file(path)
 
         # 3) 都空 → dev 模式
+        if settings.require_configured_keys:
+            raise KeyStoreError(
+                "FC_API_KEYS and FC_API_KEYS_FILE are both empty but "
+                "FC_REQUIRE_CONFIGURED_KEYS=true; refusing dev-fallback. "
+                "Set FC_API_KEYS / FC_API_KEYS_FILE, or explicitly opt "
+                "out via FC_REQUIRE_CONFIGURED_KEYS=false for local dev."
+            )
         log.warning(
             "FC_API_KEYS and FC_API_KEYS_FILE are both empty; "
             "API auth is in dev-fallback mode (all endpoints public). "
@@ -220,6 +227,20 @@ def get_key_store() -> KeyStore:
     if _KEY_STORE is None:
         _KEY_STORE = KeyStore.from_env()
     return _KEY_STORE
+
+
+def reload_key_store() -> KeyStore:
+    """Force the singleton to re-read env / JSON file (H6).
+
+    Invoked on SIGHUP by ``fapiao_cn.server``.  Returns the freshly
+    constructed ``KeyStore`` so callers can log how many keys were
+    loaded.
+    """
+
+    global _KEY_STORE
+    fresh = KeyStore.from_env()
+    _KEY_STORE = fresh
+    return fresh
 
 
 def reset_key_store_for_tests() -> None:

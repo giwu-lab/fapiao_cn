@@ -22,6 +22,7 @@ from fapiao_cn.auth.keys import (
     KeyStore,
     KeyStoreError,
     get_key_store,
+    reload_key_store,
     reset_key_store_for_tests,
 )
 from fapiao_cn.auth.ratelimit import (
@@ -41,6 +42,7 @@ __all__ = [
     "auth_required",
     "get_key_store",
     "get_rate_limiter",
+    "reload_key_store",
     "reset_key_store_for_tests",
     "reset_rate_limiter_for_tests",
 ]

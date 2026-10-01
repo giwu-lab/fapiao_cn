@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict
 
-import pytest
+# H10/H47: prime FC_API_KEYS at conftest-load time so that
+# ``from fapiao_cn.server import app`` at test-module top-level sees a
+# configured KeyStore instead of failing fast on dev-fallback.  These
+# are set BEFORE any fapiao_cn import below.
+os.environ.setdefault(
+    "FC_API_KEYS",
+    "test-key-default-do-not-use-in-prod,test-key-extract-only-do-not-use-in-prod",
+)
+os.environ.setdefault("FC_API_KEYS_FILE", "")
+os.environ.setdefault("FC_REQUIRE_CONFIGURED_KEYS", "false")
 
-from fapiao_cn.auth import (
+import pytest  # noqa: E402
+
+from fapiao_cn.auth import (  # noqa: E402
     reset_key_store_for_tests,
     reset_rate_limiter_for_tests,
 )
-from fapiao_cn.config import settings
-from fapiao_cn.parsers.invoice import (
+from fapiao_cn.config import settings  # noqa: E402
+from fapiao_cn.parsers.invoice import (  # noqa: E402
     clear_company_tax_id_cache,
     record_company_tax_id,
 )
@@ -418,12 +430,14 @@ def _auth_env(monkeypatch):
         "api_keys_file": settings.api_keys_file,
         "api_legacy_allow": settings.api_legacy_allow,
         "allowed_file_paths": settings.allowed_file_paths,
+        "require_configured_keys": settings.require_configured_keys,
     }
     settings.api_auth_enabled = True
     settings.api_keys = f"{TEST_API_KEY},{TEST_EXTRACT_KEY}"
     settings.api_keys_file = ""
     settings.api_legacy_allow = False
     settings.allowed_file_paths = samples_root
+    settings.require_configured_keys = False  # 测试 fixture 显式 opt-out
     reset_key_store_for_tests()
     reset_rate_limiter_for_tests()
     yield
