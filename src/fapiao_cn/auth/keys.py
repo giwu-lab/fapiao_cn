@@ -47,6 +47,8 @@ class KeyRecord:
     scopes: frozenset[str]
     rpm: int
     burst: int
+    # H12：verify 端点单独限速，0 表示沿用 rpm
+    verify_rpm: int = 0
 
     @property
     def key_id(self) -> str:
@@ -117,6 +119,7 @@ class KeyStore:
                     scopes=frozenset(ALL_SCOPES),
                     rpm=settings.api_key_default_rpm,
                     burst=settings.api_key_default_burst,
+                    verify_rpm=settings.api_key_default_verify_rpm,
                 )
                 for i, k in enumerate(keys)
             ]
@@ -198,6 +201,14 @@ class KeyStore:
                 raise KeyStoreError(
                     f"FC_API_KEYS_FILE={path} keys[{idx}].burst invalid: {exc}"
                 ) from exc
+            try:
+                verify_rpm = int(
+                    item.get("verify_rpm", settings.api_key_default_verify_rpm)
+                )
+            except (TypeError, ValueError) as exc:
+                raise KeyStoreError(
+                    f"FC_API_KEYS_FILE={path} keys[{idx}].verify_rpm invalid: {exc}"
+                ) from exc
             records.append(
                 KeyRecord(
                     key=key,
@@ -205,6 +216,7 @@ class KeyStore:
                     scopes=scopes,
                     rpm=max(1, rpm),
                     burst=max(1, burst),
+                    verify_rpm=max(0, verify_rpm),
                 )
             )
 

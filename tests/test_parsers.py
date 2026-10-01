@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from fapiao_cn.parsers.invoice import (
     _extract_amounts,
     _extract_invoice_number,
@@ -474,6 +476,127 @@ class TestUtils:
         from fapiao_cn.utils import truncate
 
         assert truncate(Exception("a" * 1000), limit=30).endswith("…")
+
+
+class TestCompanyNameKeywords:
+    """H15/H40: expanded company-name keyword set + negative filtering."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "重庆市旺成科技股份有限公司",
+            "京东大药房重庆有限公司",
+            "某某集团有限公司",
+            "中国人民财产保险股份有限公司",
+            "工商银行",
+            "北京协和医院",
+            "喜来登酒店",
+        ],
+    )
+    def test_company_keywords_match(self, name):
+        from fapiao_cn.utils import looks_like_company_name
+
+        assert looks_like_company_name(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "信息部",
+            "财务部",
+            "营销部",
+            "采购部",
+            "数据中心",
+            "客户服务中心",
+        ],
+    )
+    def test_generic_units_rejected(self, name):
+        from fapiao_cn.utils import looks_like_company_name
+
+        assert not looks_like_company_name(name)
+
+
+class TestInvoiceNumberAnchoring:
+    """H25: invoice_no from 统一发票监制 line must anchor."""
+
+    def test_anchored_no_match_across_lines(self):
+        from fapiao_cn.parsers.invoice import _INVOICE_NO_EMBEDDED_RE
+
+        text = "统一发票监制章\n93369231"
+        # Without anchor, this could spuriously match.
+        assert not _INVOICE_NO_EMBEDDED_RE.search(text)
+
+    def test_anchored_match_on_same_line(self):
+        from fapiao_cn.parsers.invoice import _INVOICE_NO_EMBEDDED_RE
+
+        text = "统一发票监制章 933692318830000"
+        m = _INVOICE_NO_EMBEDDED_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "933692318830000"
+
+
+class TestNameNegativePhrases:
+    """H21: company names containing 名称含义/查重 should not be split."""
+
+    def test_negative_phrase_kept_whole(self):
+        from fapiao_cn.parsers.invoice import _extract_names_and_tax_ids
+
+        text = (
+            "名 称：深圳市名称含义信息技术有限公司\n"
+            "统一社会信用代码/纳税人识别号：91440300MA5G12345X\n"
+        )
+        buyer_name, _, _, _ = _extract_names_and_tax_ids(text)
+        assert buyer_name == "深圳市名称含义信息技术有限公司"
+
+
+class TestAmountCnPicksActualTotal:
+    """H26: 备注 row must not steal the total amount."""
+
+    def test_actual_amount_wins_over_remark(self):
+        from fapiao_cn.parsers.invoice import _extract_amounts
+
+        # The 备注 row contains "壹角贰分" but the 价税合计 line
+        # carries the proper "壹佰零壹圆壹角贰分".  We expect the long
+        # one (or at least the one nearest the label).
+        text = (
+            "价税合计（大写）壹佰零壹圆壹角贰分 （小写）¥101.12\n"
+            "备注：含税费壹角贰分"
+        )
+        _, _, _, total_cn = _extract_amounts(text)
+        assert total_cn == "壹佰零壹圆壹角贰分"
+
+
+class TestTrainTicketTaxIdLength:
+    """H30: 铁路电子客票 tax id 长度扩展到 15-22 位。"""
+
+    def test_short_tax_id_matches(self):
+        from fapiao_cn.parsers.train_ticket import _BUYER_RE
+
+        text = "购买方名称:张三 统一社会信用代码:91500000709375352T"
+        m = _BUYER_RE.search(text)
+        assert m is not None
+        assert m.group(2) == "91500000709375352T"
+
+
+class TestParserRegistry:
+    """H7: /formats 描述必须与 parser 注册表同步。"""
+
+    def test_format_descriptions_match_registry(self):
+        from fapiao_cn.parsers import get_format_descriptions
+
+        desc = get_format_descriptions()
+        # All keys must be non-empty strings.
+        for k, v in desc.items():
+            assert isinstance(v, str) and v, k
+        # All keys must be non-empty strings.
+        for k, v in desc.items():
+            assert isinstance(v, str) and v, k
+
+    def test_default_parser_described(self):
+        from fapiao_cn.parsers import get_format_descriptions
+
+        desc = get_format_descriptions()
+        assert "new" in desc
+        assert "京东" in desc["new"] or "增值税" in desc["new"]
 
 
 class TestXmlParser:

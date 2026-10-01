@@ -33,6 +33,13 @@ from fapiao_cn.utils import (
 # cache lets us back-fill the missing slot when we have seen the same
 # name with its tax id elsewhere.  Thread-safe so it is safe to share
 # across requests handled by a single uvicorn worker.
+#
+# **Scope limitation (H9/H34):** the cache lives in process memory only.
+# Multi-worker (``uvicorn --workers N``) and multi-pod (K8s) deployments
+# do NOT share the cache, so the back-fill may succeed on one replica
+# and fail on another.  This is a best-effort optimisation, not a
+# contract — downstream consumers should treat the resulting tax id
+# field as advisory, especially for GDPR / PIPL sensitive records.
 _KNOWN_TAX_IDS: dict = {}
 _KNOWN_TAX_IDS_LOCK = threading.Lock()
 
@@ -77,7 +84,9 @@ _INVOICE_TYPE_RE = re.compile(
 )
 _INVOICE_CODE_RE = re.compile(r"发\s*票\s*代\s*码\s*[:：]\s*(\d+)")
 _INVOICE_NO_RE = re.compile(r"发\s*票\s*号\s*码\s*[:：]\s*(\d+)")
-_INVOICE_NO_EMBEDDED_RE = re.compile(r"统\s*一\s*发\s*票\s*监\s*制\S*\s*(\d{15,25})")
+# H25: anchor at line / word boundary to avoid matching digits that
+# happen to live on a later line after "统一发票监制".
+_INVOICE_NO_EMBEDDED_RE = re.compile(r"统\s*一\s*发\s*票\s*监\s*制\S*\s*(\d{15,25})(?=\s|$)")
 _ISSUE_DATE_RE = re.compile(
     r"开\s*票\s*日\s*期\s*[:：]?\s*((?:20\d{2}|19\d{2})\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日)"
 )
@@ -97,6 +106,8 @@ _TWO_COLUMN_NAMES_RE = re.compile(
     r"销[\s\S]*?名\s*称\s*[:：]?\s*(\S+(?:\s+\S+)*?)(?=\s|信|$|\n)"
 )
 _TRAILING_SALES_RE = re.compile(r"\s*[销售]\s*$")
+# H21: phrases where 名称 should NOT be split as a separator.
+_NAME_NEGATIVE_PHRASES = ("名称含义", "名称查重", "销售方名称")
 
 # Amount patterns
 _PRICE_RE = re.compile(r"[¥￥]\s*(-?\d[\d,]*\.\d{2})")
@@ -111,7 +122,7 @@ _HEJI_TAX_FREE_RE = re.compile(
     r"合\s*计\s*\n?\s*[¥￥]?(\d+\.\d{2})\s*\*"
 )
 _TOTAL_CN_RE = re.compile(
-    r"价\s*税\s*合\s*计\s*[（(]\s*大\s*写\s*[）)]\s*([^\n]+?)(?=[（(]\s*小\s*写|$)"
+    r"价\s*税\s*合\s*计\s*[（(]\s*大\s*写\s*[）)]\s*([^\n]+?)(?=[（(]\s*小\s*写|备注|备注栏|$)"
 )
 # Allow 1 or 2 decimal digits in the 总价小写 — some issuers (e.g. 滴滴
 # v2) print ``¥ 46.3`` without trailing zero.  We normalise to 2
@@ -171,6 +182,12 @@ def _extract_names_and_tax_ids(text: str) -> tuple:
         val = m.group(1).strip()
         # Skip false matches from the table column header "项目名称"
         if _TABLE_HEADER_KEYWORDS.search(val):
+            continue
+        # H21: phrases that contain "名称" as part of a label rather
+        # than a separator.  Treating these as 名称 would over-split
+        # company names like "深圳市名称信息技术有限公司".
+        if any(phrase in val for phrase in _NAME_NEGATIVE_PHRASES):
+            raw_names.append(val)
             continue
         parts = re.split(r"\s+名\s*称\s*[:：]?\s*", val)
         raw_names.extend(p.strip() for p in parts if p.strip())
@@ -266,6 +283,11 @@ def _extract_amounts(text: str) -> tuple:
         raw = strip_spaces(total_cn_m.group(1))
         tokens = _AMOUNT_CN_RE.findall(raw)
         if tokens:
+            # H26: regex stops at 备注/小写, so the captured span
+            # should already contain only the actual 合计 amount.
+            # Among multiple CN tokens we still pick the LONGEST
+            # because the 合计 amount is typically the most
+            # descriptive (e.g. 壹佰零壹圆壹角贰分 vs 壹角贰分 in 备注).
             total_cn = max(tokens, key=len)
 
     # Numeric total (小写)

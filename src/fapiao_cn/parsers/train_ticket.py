@@ -22,7 +22,7 @@ _ISSUE_DATE_RE = re.compile(
     r"开\s*票\s*日\s*期\s*[:：]?\s*((?:20\d{2}|19\d{2})\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日)"
 )
 _BUYER_RE = re.compile(
-    r"购\s*买\s*方\s*名\s*称\s*[:：]\s*(\S+?)\s*统\s*一\s*社\s*会\s*信\s*用\s*代\s*码\s*[:：]\s*([0-9A-Z]{15,20})"
+    r"购\s*买\s*方\s*名\s*称\s*[:：]\s*(\S+?)\s*统\s*一\s*社\s*会\s*信\s*用\s*代\s*码\s*[:：]\s*([0-9A-Z]{15,22})"
 )
 _BUYER_NAME_RE = re.compile(r"购\s*买\s*方\s*名\s*称\s*[:：]\s*(\S+)")
 _FARE_RE = re.compile(r"[¥￥]\s*(\d+\.\d{2})")

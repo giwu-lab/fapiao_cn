@@ -12,10 +12,19 @@ from typing import List, Tuple
 
 # Company name keywords (used to detect names that look like real organisations
 # versus labels, in two-column layouts and fallback patterns).
+# H15/H40: added 集团 / 银行 / 医院 / 学校 / 事务所 / 工作室 / 酒店 / 餐厅 / 商店 / 酒店
+# so issuers without 「公司/厂/店」suffix still get recognised.
 _COMPANY_KEYWORDS = (
-    "公司", "厂", "店", "部", "社", "中心", "企业",
+    "公司", "厂", "店", "社", "中心", "企业",
     "超市", "加油站", "分行", "分公司", "分店", "经营部", "合作社",
+    "集团", "银行", "医院", "学校", "事务所", "工作室", "酒店", "餐厅",
+    "商店", "研究院", "事务所",
 )
+# Short organisational units that should NOT count as a company name
+# (too generic — often appear in department labels).  A string whose
+# ONLY matching keyword comes from this list is treated as a department
+# label rather than a company.
+_COMPANY_NEGATIVE = ("部", "办公室", "办事处", "中心")
 
 # Pre-compiled patterns
 CIPHER_RE = re.compile(r"[><*+\-/\\]{3,}")
@@ -113,12 +122,34 @@ def looks_like_company_name(s: str, *, tail_only: bool = True) -> bool:
     "统一社会信用代码/纳税人识别号：" from being mis-detected.
     ``tail_only=False``: the entire string is checked (used by the
     merged-code parser, which deals with looser text).
+
+    H15/H40: also rejects strings whose ONLY matching keyword is one of
+    the generic organisational units (部 / 办公室 / 办事处) — those
+    tend to be department labels, not company names.
     """
 
     if not s or len(s) < 4 or len(s) > 40:
         return False
     haystack = s[-6:] if tail_only else s
-    return any(k in haystack for k in _COMPANY_KEYWORDS)
+    if not any(k in haystack for k in _COMPANY_KEYWORDS):
+        return False
+    # If the only positive keyword is a generic unit, the rest of the
+    # string must also contain at least one stronger company keyword.
+    matched = [k for k in _COMPANY_KEYWORDS if k in haystack]
+    generic_only = all(k in _COMPANY_NEGATIVE for k in matched)
+    if generic_only and tail_only:
+        # Try the full string for a stronger signal before declaring
+        # it a department label.
+        return any(
+            k in s and k not in _COMPANY_NEGATIVE for k in _COMPANY_KEYWORDS
+        )
+    if generic_only and not tail_only:
+        # tail_only=False is used by merged-code parser which deals with
+        # looser text.  We still require at least one STRONG keyword.
+        return any(
+            k in s and k not in _COMPANY_NEGATIVE for k in _COMPANY_KEYWORDS
+        )
+    return True
 
 
 def looks_like_tax_id(s: str) -> bool:

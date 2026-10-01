@@ -180,7 +180,13 @@ def auth_required(*required_scopes: str):
 
         # ── 限速 ──
         limiter = get_rate_limiter()
-        ok, retry_after = limiter.consume(rec.key_id, rec)
+        # H12: verify 端点使用单独的 RPM 配额（0 = 沿用 rpm）
+        scope_rpm = (
+            rec.verify_rpm
+            if "verify" in required_scopes and rec.verify_rpm > 0
+            else None
+        )
+        ok, retry_after = limiter.consume(rec.key_id, rec, rpm=scope_rpm)
         if not ok:
             exc = HTTPException(
                 status_code=429,

@@ -12,19 +12,27 @@ from fapiao_cn.server import app
 
 client = TestClient(app)
 
-
 def _fake_response(body: dict) -> MagicMock:
     """Build a mock httpx.Response.
 
-    Real ``httpx.Response.json()`` is sync, but our wrapper awaits it
-    so it can work for both the in-process async client and any future
-    stream-based reader.  We mock ``.json()`` as an AsyncMock so that
-    ``await resp.json()`` resolves to ``body``.
+    ``verify_invoice`` streams the body via ``resp.aiter_bytes()`` to
+    enforce a size cap (H11).  We mimic that by exposing an async
+    iterator that yields the JSON-encoded bytes plus a sync ``headers``
+    dict that carries the ``content-length`` hint.
     """
+
+    import json as _json
+
+    raw = _json.dumps(body).encode("utf-8")
+
+    async def _aiter(_chunk_size: int = 65536):
+        yield raw
+
     m = MagicMock()
     m.status_code = 200
     m.raise_for_status.return_value = None
-    m.json = AsyncMock(return_value=body)
+    m.headers = {"content-length": str(len(raw))}
+    m.aiter_bytes = _aiter
     return m
 
 

@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     api_keys_file: str = ""
     api_key_default_rpm: int = 60
     api_key_default_burst: int = 10
+    # H12: /verify 端点单独限速（默认 30 RPM）。
+    api_key_default_verify_rpm: int = 30
     # 双轨兼容：未带 token 的旧调用方是否放行（仅在 key 已配置时生效）；默认 false
     api_legacy_allow: bool = False
     # H10/H47：生产模式强制 — dev 兜底（KeyStore.disabled）默认拒绝启动。

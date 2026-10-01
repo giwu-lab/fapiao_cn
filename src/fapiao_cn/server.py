@@ -34,6 +34,7 @@ from fapiao_cn.cache import get_cache
 from fapiao_cn.config import settings
 from fapiao_cn.formats import detect_format, parse_pdf
 from fapiao_cn.input import resolve_batch_input, resolve_input
+from fapiao_cn.parsers import get_format_descriptions
 from fapiao_cn.pipeline import run as run_pipeline
 from fapiao_cn.schemas import ExtractResponse, PdfRaw
 from fapiao_cn.utils import truncate as _truncate_msg
@@ -41,15 +42,9 @@ from fapiao_cn.verify import VerifyRequest, verify_invoice
 
 log = logging.getLogger("fapiao_cn.server")
 
-# Supported invoice-type descriptions for the ``/formats`` endpoint.
-_FORMATS = {
-    "new": "电子发票（增值税专用发票/普通发票）- 标准新格式（含京东、水费、通行费变体）",
-    "old": "电子发票（普通发票）- 旧格式（含密码区、校验码）",
-    "merged_code": "电子发票（普通发票）- 合并代码/成品油变体",
-    "airline": "电子发票（航空运输电子客票行程单）",
-    "train": "电子发票（铁路电子客票）",
-    "non_tax_receipt": "中央非税收入统一票据（电子）（如专利年费、行政事业性收费）",
-}
+# /formats descriptions are sourced from the parser registry (H7)
+# so adding a new parser automatically surfaces here.
+_FORMATS = get_format_descriptions()
 
 
 # ── Batch thread pool (re-created lazily if worker count changes) ──

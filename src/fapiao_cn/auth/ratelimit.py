@@ -29,13 +29,22 @@ class RateLimiter:
         self._buckets: dict[str, _Bucket] = {}
         self._lock = threading.Lock()
 
-    def consume(self, key_id: str, rec: KeyRecord, *, cost: float = 1.0) -> tuple[bool, float]:
+    def consume(
+        self,
+        key_id: str,
+        rec: KeyRecord,
+        *,
+        cost: float = 1.0,
+        rpm: int | None = None,
+    ) -> tuple[bool, float]:
         """尝试消耗 ``cost`` 个 token。
 
-        返回 ``(ok, retry_after_seconds)``；当 ``ok=False`` 时 ``retry_after`` 是
-        到下一次可用所需等待的秒数（向上取整到 0.1s）。
+        ``rpm`` defaults to ``rec.rpm``; pass an explicit value when the
+        call site uses a scope-specific quota (e.g. ``verify_rpm`` for
+        the verify endpoint — H12).
         """
 
+        target_rpm = rec.rpm if rpm is None else rpm
         now = time.monotonic()
         with self._lock:
             bucket = self._buckets.get(key_id)
@@ -43,7 +52,7 @@ class RateLimiter:
                 bucket = _Bucket(
                     tokens=float(rec.burst),
                     last_refill=now,
-                    rpm=rec.rpm,
+                    rpm=target_rpm,
                     burst=rec.burst,
                 )
                 self._buckets[key_id] = bucket
