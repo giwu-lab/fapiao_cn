@@ -9,7 +9,8 @@
 
 The control-script is meant for **developer / CI** usage where the venv
 is already installed (``pip install -e .``).  Production deployments use
-the Docker image (``docker compose up -d``).
+the Docker image (``docker compose up -d``) which embeds its own restart
+policy / healthcheck — no in-process supervisor needed (H28).
 """
 
 from __future__ import annotations
@@ -17,8 +18,10 @@ from __future__ import annotations
 import argparse
 import os
 import signal
+import socket
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -29,6 +32,10 @@ LOG_DIR = "logs"
 LOG_FILE = "logs/server.log"
 LOG_CONFIG = "deploy/log_config.yaml"
 APP_TARGET = "fapiao_cn.server:app"
+# H46: run uvicorn with a fixed cwd (the package root) regardless of
+# where the user invoked ``fapiao_cn start`` from.  This makes logs /
+# sample lookups deterministic.
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _pid_path() -> Path:
@@ -53,11 +60,60 @@ def _alive(pid: int) -> bool:
         return False
 
 
+def _port_available(host: str, port: int) -> bool:
+    """H20: probe a (host, port) pair via SO_REUSEADDR-free bind.
+
+    Returns True when the bind succeeds (port free) and False when the
+    OS rejects with EADDRINUSE.  Other errors (permission, network) are
+    also reported as "unavailable" so the caller can exit cleanly
+    instead of starting a doomed uvicorn.
+    """
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def _atomic_write_pid(pid: int) -> None:
+    """H23: write the PID file atomically with mode 0600.
+
+    Other users must not be able to read or signal the daemon's PID,
+    and a partial read by another tool must not produce garbage.
+    """
+
+    pid_path = _pid_path()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".fapiao_cn.pid.", dir=str(pid_path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"{pid}\n")
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, pid_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     pid = _read_pid()
     if pid and _alive(pid):
         print(f"[fapiao_cn] already running (pid={pid})")
         return 0
+    # H20: bail out early if the chosen port is already taken.
+    if not _port_available(args.host, args.port):
+        print(
+            f"[fapiao_cn] port {args.port} on {args.host} is already in use; "
+            "refusing to start uvicorn",
+            file=sys.stderr,
+        )
+        return 1
     Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
     log = open(LOG_FILE, "ab", buffering=0)
     cmd = [
@@ -70,18 +126,18 @@ def cmd_start(args: argparse.Namespace) -> int:
         "--port",
         str(args.port),
     ]
-    # Use the same YAML log config as the Docker image so dev output
-    # carries timestamps and the audit logger is wired up.
     log_config_path = Path(LOG_CONFIG)
     if log_config_path.exists():
         cmd.extend(["--log-config", str(log_config_path)])
+    # H46: explicit cwd so log paths inside the app resolve consistently.
     proc = subprocess.Popen(
         cmd,
         stdout=log,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        cwd=str(PACKAGE_ROOT),
     )
-    _pid_path().write_text(str(proc.pid))
+    _atomic_write_pid(proc.pid)
     print(f"[fapiao_cn] started pid={proc.pid} on {args.host}:{args.port}")
     return 0
 
@@ -110,6 +166,8 @@ def cmd_restart(args: argparse.Namespace) -> int:
 
 
 def cmd_dev(args: argparse.Namespace) -> int:
+    # H46: dev mode also pins cwd so log_config.yaml is found.
+    os.chdir(PACKAGE_ROOT)
     import uvicorn
 
     uvicorn.run(

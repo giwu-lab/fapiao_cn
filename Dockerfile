@@ -4,11 +4,13 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# 一次性构建本项目 wheel
+# H45: split dependency layer from source layer so changes to src/
+# don't invalidate the (large) pip download cache.
 COPY pyproject.toml README.md ./
-COPY src ./src
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels .
 
-# 用 build-system 要求的 hatchling 自举（PEP 517），把产物放到 /wheels
+# Now copy src/ separately and rebuild the project wheel.
+COPY src ./src
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels .
 
 # 预先下载所有运行时依赖 wheel（国内 PyPI 镜像；传 --build-arg PIP_INDEX_URL= 关闭）
