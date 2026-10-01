@@ -36,7 +36,7 @@ services:
      # - ./keys.json:/app/keys.json:ro  # 环境变量修改 ${FC_API_KEYS_FILE:/app/keys.json}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8091/health"]
-      interval: 3600s
+      interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s

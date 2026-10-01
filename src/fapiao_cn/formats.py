@@ -21,6 +21,19 @@ from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
 from fapiao_cn.pipeline import run
 from fapiao_cn.schemas import ExtractResponse, InvoiceRecord
 
+# Maximum number of characters echoed back in an error message.
+# Internal exceptions (PdfminerException in particular) can embed long
+# paths / trailer text — we truncate so the wire response stays bounded
+# and we don't leak internals (H13).
+_MAX_ERR_TAIL = 200
+
+
+def _truncate(value: object, limit: int = _MAX_ERR_TAIL) -> str:
+    s = str(value)
+    if len(s) <= limit:
+        return s
+    return s[: limit - 1] + "…"
+
 
 def detect_format(contents: bytes, filename: str) -> str:
     """Identify document format: ``"xml"`` or ``"pdf"`` (default)."""
@@ -105,7 +118,7 @@ def parse_pdf(contents: bytes, filename: str = "") -> ExtractResponse:
         except (ValueError, KeyError, AttributeError, PdfminerException) as exc:
             resp = ExtractResponse(
                 file=filename,
-                message=f"error: parse_failed: {exc}",
+                message=f"error: parse_failed: {_truncate(exc)}",
             )
         else:
             resp = _build_response(result.record, filename, result.message)

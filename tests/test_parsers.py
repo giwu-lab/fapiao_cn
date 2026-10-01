@@ -453,6 +453,29 @@ class TestNonTaxReceipt:
         assert _clean_seller_name("  国 家知识产权局专利局  ") == "国家知识产权局专利局"
 
 
+class TestUtils:
+    """Shared helpers (utils.py)."""
+
+    def test_truncate_short_unchanged(self):
+        from fapiao_cn.utils import truncate
+
+        assert truncate("hello") == "hello"
+        assert truncate("hello", limit=10) == "hello"
+
+    def test_truncate_long_clipped(self):
+        from fapiao_cn.utils import truncate
+
+        long_s = "x" * 500
+        out = truncate(long_s, limit=50)
+        assert len(out) == 50
+        assert out.endswith("…")
+
+    def test_truncate_non_string(self):
+        from fapiao_cn.utils import truncate
+
+        assert truncate(Exception("a" * 1000), limit=30).endswith("…")
+
+
 class TestXmlParser:
     """Unit tests for ``fapiao_cn.parsers.xml_invoice``."""
 

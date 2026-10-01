@@ -46,6 +46,20 @@ def first_match(pattern: str, text: str, group: int = 1, flags: int = 0) -> str:
     return m.group(group).strip() if m else ""
 
 
+def truncate(value: object, limit: int = 200) -> str:
+    """Stringify ``value`` and clamp it to ``limit`` characters.
+
+    Long internal-exception messages (PdfminerException in particular)
+    can embed PDF trailer / filesystem paths that should not appear on
+    the wire — see H13.
+    """
+
+    s = str(value)
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)] + "…"
+
+
 def strip_spaces(s: str) -> str:
     """Remove all whitespace from a string (digits, dates, etc.)."""
 

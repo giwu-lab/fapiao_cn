@@ -30,6 +30,7 @@ from fapiao_cn.formats import detect_format, parse_pdf
 from fapiao_cn.input import resolve_batch_input, resolve_input
 from fapiao_cn.pipeline import run as run_pipeline
 from fapiao_cn.schemas import ExtractResponse, PdfRaw
+from fapiao_cn.utils import truncate as _truncate_msg
 from fapiao_cn.verify import VerifyRequest, verify_invoice
 
 log = logging.getLogger("fapiao_cn.server")
@@ -65,11 +66,21 @@ def _get_batch_pool(workers: int) -> ThreadPoolExecutor:
 
 
 def _parse_one(contents: bytes, filename: str) -> ExtractResponse:
-    """Worker entry-point: parse a single invoice, swallow exceptions."""
+    """Worker entry-point: parse a single invoice, swallow exceptions.
+
+    Per-file failures must not abort the batch, but the underlying
+    traceback is logged so an operator can investigate (H4).
+    """
 
     try:
         return parse_pdf(contents, filename=filename)
     except Exception as exc:
+        log.exception(
+            "batch worker failed for %s (%d bytes): %s",
+            filename,
+            len(contents),
+            exc,
+        )
         return ExtractResponse(file=filename, message=f"error: internal_error: {exc}")
 
 
@@ -230,10 +241,11 @@ def create_app() -> FastAPI:
         try:
             resp = parse_pdf(contents, filename=filename)
         except Exception as exc:
+            log.exception("parse_pdf failed for %s", filename)
             return JSONResponse(
                 status_code=500,
                 content=ExtractResponse(
-                    message=f"error: internal_error: {exc}"
+                    message=f"error: internal_error: {_truncate_msg(exc)}"
                 ).model_dump(exclude_none=True),
             )
 
@@ -302,7 +314,7 @@ def create_app() -> FastAPI:
         except (ValueError, KeyError, AttributeError, PdfminerException) as exc:
             return JSONResponse(
                 status_code=422,
-                content=PdfRaw(message=f"error: parse_failed: {exc}").model_dump(),
+                content=PdfRaw(message=f"error: parse_failed: {_truncate_msg(exc)}").model_dump(),
             )
         return result.pdf_raw
 
@@ -330,7 +342,11 @@ def create_app() -> FastAPI:
         try:
             return await verify_invoice(req)
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"verify_proxy_error: {exc}")
+            log.exception("verify proxy error: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"verify_proxy_error: {_truncate_msg(exc)}",
+            )
 
     @app.post(
         "/extract-and-verify",
@@ -350,10 +366,11 @@ def create_app() -> FastAPI:
         try:
             resp = parse_pdf(contents, filename=filename)
         except Exception as exc:
+            log.exception("parse_pdf failed for %s", filename)
             return JSONResponse(
                 status_code=500,
                 content=ExtractResponse(
-                    message=f"error: internal_error: {exc}"
+                    message=f"error: internal_error: {_truncate_msg(exc)}"
                 ).model_dump(exclude_none=True),
             )
         if resp.message.startswith("error:"):
@@ -373,7 +390,8 @@ def create_app() -> FastAPI:
                 ))
                 out["verify_result"] = v.model_dump()
             except Exception as exc:
-                out["verify_error"] = str(exc)
+                log.exception("verify proxy error in extract-and-verify: %s", exc)
+                out["verify_error"] = _truncate_msg(exc)
         return out
 
     return app

@@ -49,6 +49,28 @@ class TestBatchExtract:
         assert body[0]["message"] == "success"
         assert body[1]["message"].startswith("error:")
 
+    def test_internal_error_logged(self, auth_headers, caplog, monkeypatch):
+        """H4: an unexpected parse exception must be logged with a traceback."""
+        import logging
+
+        def _boom(contents, filename=""):
+            raise RuntimeError("simulated parser crash")
+
+        monkeypatch.setattr("fapiao_cn.server.parse_pdf", _boom)
+
+        data = (
+            ("files", ("火车票01.pdf", io.BytesIO(_load("火车票01.pdf")), "application/pdf")),
+        )
+        with caplog.at_level(logging.ERROR, logger="fapiao_cn.server"):
+            resp = client.post("/extract/batch", headers=auth_headers, files=data)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body) == 1
+        # The batch swallows the exception, so we still get a response
+        # item, but caplog should now carry the traceback.
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("batch worker failed" in m for m in msgs), msgs
+
     def test_too_many_files(self, auth_headers):
         """Exceeding max_batch_files should return 400."""
         files = []
