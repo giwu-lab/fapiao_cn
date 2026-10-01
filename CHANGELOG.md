@@ -6,6 +6,64 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **H1 LFI**: `/extract` `file_path` input now gated by `FC_ALLOWED_FILE_PATHS` (CSV directory whitelist). Symlinks and `../` escapes are blocked via `Path.resolve()` + `is_relative_to()`. Empty whitelist disables `file_path` entirely. (#1)
+- **H2 SSRF**: `/extract` URL fetches now block cloud-metadata destinations (`169.254.169.254`, `fd00:ec2::254`). Other internal networks are delegated to Docker / K8s network policy per agreed risk model. Response body is streamed with a `max_file_mb` byte cap. (#2)
+- **H3 OOM**: `file_base64` decoding now size-checked **before** allocation so a 1 GB payload no longer forces a 1 GB allocation. (#3)
+- **H14 XXE**: XML parser now uses `defusedxml.ElementTree` instead of the stdlib `xml.etree`, blocking external-entity and billion-laughs attacks. New runtime dependency: `defusedxml>=0.7.1`. (#14)
+- **H10/H47 production guard**: `FC_REQUIRE_CONFIGURED_KEYS=true` (default) now causes uvicorn to fail fast at startup when no keys are configured, preventing accidental dev-fallback in production. Devs opt out with `FC_REQUIRE_CONFIGURED_KEYS=false`. (#10, #47)
+
+### Reliability
+- **H4**: Batch worker `_parse_one`, `/extract`, `/extract-and-verify`, `/verify` now log full tracebacks via `log.exception` instead of silently swallowing them. (#4)
+- **H8**: docker-compose healthcheck interval restored to `30s` (was `3600s`). (#8)
+- **H13**: New `utils.truncate(value, limit=200)` clamps error-message echoes; `PdfminerException` trailer text no longer leaks onto the wire. All error-producing endpoints (`/extract`, `/raw`, `/verify`, `/extract-and-verify`) routed through the helper. (#13)
+- **H5**: `BaseHTTPMiddleware` replaced with a pure ASGI middleware that captures response status + headers via a custom `send` wrapper. Streaming / SSE / JSONResponse all flow through unchanged. (#5)
+- **H6**: SIGHUP reload handler hot-reloads `KeyStore` (and LRU cache via H42) so operators can rotate `keys.json` without restarting the service. (#6)
+- **H11**: `/verify` proxy now streams the upstream body via `aiter_bytes` and enforces a 10 MiB cap, so a malicious proxy cannot OOM the service. (#11)
+- **H18**: `/health/full` now flags `cache_low_hit_ratio=True` when the LRU hit ratio drops below 5% over 50+ lookups (503 degraded). (#18)
+- **H22**: `/health/full` resolves `logs/` and `samples/` relative to the installed package, not the process cwd. (#22)
+- **H42**: New `cache.reload_if_settings_changed()` rebuilds the LRU singleton on SIGHUP when `FC_CACHE_SIZE` changes. (#42)
+
+### CLI / Deployment
+- **H20**: `fapiao_cn start` now probes `(host, port)` via `SO_REUSEADDR` and refuses to spawn uvicorn when the port is busy. (#20)
+- **H23**: PID file is now written via `tempfile + os.replace()` with `0600` mode so concurrent readers cannot observe partial writes. (#23)
+- **H28**: CLI docstring notes that production crash-restart relies on Docker / systemd / supervisord rather than an in-process supervisor. (#28)
+- **H45**: Dockerfile builder stage now splits `pyproject.toml` from `src/` so a source-only change doesn't invalidate the (slow) pip download layer. (#45)
+- **H46**: `fapiao_cn start` / `dev` now pin `cwd` to the package root so log paths and `/health/full` file lookups are deterministic. (#46)
+
+### Configuration
+- **H39**: KeyStore loading moved from lifespan into `create_app()` itself, so uvicorn fails fast at boot — not on the first request — when `FC_API_KEYS_FILE` is misconfigured. (#39)
+
+### Parsers
+- **H7**: `/formats` descriptions now sourced from the parser registry via `parsers.get_format_descriptions()` so adding a new parser surfaces documentation automatically. (#7)
+- **H9/H34**: Documented that `_KNOWN_TAX_IDS` is process-local; multi-worker / multi-pod deployments don't share the cache. Marked as best-effort, not a contract (GDPR / PIPL advisory). (#9, #34)
+- **H12**: `KeyRecord.verify_rpm` field + per-scope rate limiting so `/verify` has its own quota independent of `/extract`. New env: `FC_API_KEY_DEFAULT_VERIFY_RPM` (default 30). (#12)
+- **H15/H40**: Expanded company-name keyword set (集团/银行/医院/学校/事务所/工作室/酒店/餐厅/商店) plus a negative list (部/办公室/办事处/中心) so department labels aren't mistaken for company names. (#15, #40)
+- **H21**: New e-invoice parser now recognises `名称含义` / `名称查重` / `销售方名称` as parts of a name rather than as separators. (#21)
+- **H25**: `_INVOICE_NO_EMBEDDED_RE` anchored with `(?=\s|$)` so it doesn't grab digits from a later line. (#25)
+- **H26**: `_TOTAL_CN_RE` capture now stops at `备注` / `小写` so a 大写 amount in the 备注 row can no longer shadow the actual total. (#26)
+- **H30**: `train_ticket` tax-id regex lengthened to 15-22 chars. (#30)
+
+### Tests / Tooling
+- **H32**: pytest `filterwarnings` extended to silence the `anyio.abc.BlockingPortal` deprecation. (#32)
+- **H37**: `tests/conftest.py` now hard-fails if `FC_API_KEYS_FILE` is set, preventing accidental prod-key use. (#37)
+- **H43**: README documents that the XML parser's field names are hard-coded against the current `EInvoice` schema; schema upgrades require manual sync. (#43)
+- Test count: **235 → 303** passing (2 xfailed).
+
+### Migration Notes
+```bash
+# 1) Add new dependency
+pip install -e .
+
+# 2) Production hardening (one-time):
+#    - 显式设置 FC_API_KEYS 或 FC_API_KEYS_FILE (H10)
+#    - 设置 FC_ALLOWED_FILE_PATHS=/srv/inbox (H1)
+#    - (可选) 升级 keys.json 加入 verify_rpm 字段 (H12)
+#
+# 3) 重新构建镜像以引入 defusedxml (H14)
+docker compose build --pull
+```
+
 ### Breaking
 - `pdf_raw` field removed from `/extract`, `/extract/batch`, `/extract-and-verify`, and `parse_pdf()` response. Callers passing `?raw=true` on the regular endpoints will no longer receive a raw-text payload (the query parameter is silently ignored).
 

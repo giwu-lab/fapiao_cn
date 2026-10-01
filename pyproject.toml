@@ -67,6 +67,8 @@ addopts = "-v"
 # ``UserWarning`` with a tight message regex to keep the scope narrow.
 filterwarnings = [
     "ignore:Using `httpx` with `starlette.testclient` is deprecated.*:UserWarning",
+    # H32: anyio 4.x deprecation emitted by TestClient at import time.
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated.*:DeprecationWarning",
 ]
 
 [tool.ruff]

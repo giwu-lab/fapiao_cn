@@ -17,6 +17,16 @@ os.environ.setdefault(
 os.environ.setdefault("FC_API_KEYS_FILE", "")
 os.environ.setdefault("FC_REQUIRE_CONFIGURED_KEYS", "false")
 
+# H37: hard guard against accidentally pointing the test suite at a
+# real keys file.  The conftest primes test keys via env above, so any
+# non-empty FC_API_KEYS_FILE at this point means an operator forgot
+# to unset it (and we would silently start using the real prod keys).
+if os.environ.get("FC_API_KEYS_FILE"):
+    raise RuntimeError(
+        "FC_API_KEYS_FILE must be empty during tests "
+        f"(found {os.environ['FC_API_KEYS_FILE']!r}); unset it before running pytest"
+    )
+
 import pytest  # noqa: E402
 
 from fapiao_cn.auth import (  # noqa: E402

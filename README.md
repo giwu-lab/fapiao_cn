@@ -260,3 +260,5 @@ python -m pytest tests/ -v                  # 直接 pytest
 | `parsers/train_ticket.py` | 铁路电子客票 |
 | `parsers/non_tax_receipt.py` | 中央非税收入统一票据（专利年费等） |
 | `parsers/xml_invoice.py` | XML 全电发票 |
+
+> ⚠️ **H43: XML schema 同步责任**:`parsers/xml_invoice.py` 通过 `defusedxml.ElementTree` 解析 XML 文档,字段名（如 `SellerInformation/SellerName`、`BasicInformation/TotalTax-includedAmount`）与发票平台当前的 ``EInvoice`` schema **硬编码对应**。若国家税务总局 / 发票平台升级 schema（命名空间 URI 变化、字段重命名等）需要手动同步本文件。建议在升级前先跑一次 XML 样本回归。
