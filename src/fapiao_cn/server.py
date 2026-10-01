@@ -31,6 +31,7 @@ from fapiao_cn.auth import (
     reload_key_store,
 )
 from fapiao_cn.cache import get_cache
+from fapiao_cn.cache import reload_if_settings_changed as _reload_cache
 from fapiao_cn.config import settings
 from fapiao_cn.formats import detect_format, parse_pdf
 from fapiao_cn.input import resolve_batch_input, resolve_input
@@ -199,7 +200,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
-        # Register SIGHUP for hot-reloading KeyStore (H6).
+        # Register SIGHUP for hot-reloading KeyStore (H6) and cache (H42).
         loop = asyncio.get_running_loop()
 
         def _reload_on_sighup() -> None:
@@ -212,7 +213,12 @@ def create_app() -> FastAPI:
                     fresh.disabled,
                 )
             except KeyStoreError as exc:
-                log.error("SIGHUP reload failed: %s", exc)
+                log.error("SIGHUP reload (keys) failed: %s", exc)
+            try:
+                if _reload_cache():
+                    log.info("SIGHUP received; cache size adjusted")
+            except Exception as exc:  # noqa: BLE001
+                log.error("SIGHUP reload (cache) failed: %s", exc)
 
         try:
             loop.add_signal_handler(signal.SIGHUP, _reload_on_sighup)
@@ -276,12 +282,15 @@ def create_app() -> FastAPI:
         except Exception:
             checks["pdfplumber"] = False
 
-        # Writable log directory is required for /extract to leave
-        # audit traces in non-streaming mode.
+        # H22: writable log directory is required for /extract to leave
+        # audit traces.  Resolve relative to the package root rather
+        # than the process cwd.
         try:
             from pathlib import Path
-            Path("logs").mkdir(parents=True, exist_ok=True)
-            test_file = Path("logs") / ".health_probe"
+            pkg_root = Path(__file__).resolve().parent.parent
+            log_dir = pkg_root / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            test_file = log_dir / ".health_probe"
             test_file.write_text("ok")
             test_file.unlink()
             checks["disk_writable"] = True
@@ -289,11 +298,25 @@ def create_app() -> FastAPI:
             checks["disk_writable"] = False
 
         checks["parsers_count"] = 6  # airline/train/merged_code/non_tax_receipt/old/new (+ xml)
-        checks["samples_dir_exists"] = (
-            Path("samples").is_dir() if Path("samples").exists() else True
-        )
+        # H22: resolve paths relative to the fapiao_cn package, not the
+        # process cwd.  ``fapiao_cn start`` may have a different cwd
+        # than the package install root.
+        from pathlib import Path as _Path
+        pkg_root = _Path(__file__).resolve().parent.parent
+        # H27: parsers_count derived from the registry, not a hard-coded
+        # literal that drifts as parsers get added.
+        from fapiao_cn.parsers import _RULES as _PARSER_RULES  # noqa: PLC0415
+        checks["parsers_count"] = len(_PARSER_RULES) + 1  # +1 for the XML parser
+        checks["samples_dir_exists"] = (pkg_root / "samples").is_dir()
         checks["uptime_seconds"] = int(time.time() - _START_TIME)
-        checks["cache"] = get_cache().stats()
+        cache_stats = get_cache().stats()
+        # H18: warn when the cache hit ratio is suspiciously low.
+        if (
+            cache_stats["capacity"] > 0
+            and cache_stats["hits"] + cache_stats["misses"] > 50
+        ):
+            checks["cache_low_hit_ratio"] = cache_stats["hit_ratio"] < 0.05
+        checks["cache"] = cache_stats
 
         bool_checks = [v for v in checks.values() if isinstance(v, bool)]
         ok = all(bool_checks) if bool_checks else True

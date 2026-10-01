@@ -56,6 +56,37 @@ class TestHealth:
         assert resp.status_code == 503
         assert resp.json()["status"] == "degraded"
 
+    def test_health_full_parsers_count_matches_registry(self, auth_headers):
+        """H27: parsers_count must reflect the live registry."""
+        from fapiao_cn.parsers import _RULES
+
+        resp = client.get("/health/full", headers=auth_headers)
+        assert resp.status_code in (200, 503)
+        data = resp.json()
+        assert data["checks"]["parsers_count"] == len(_RULES) + 1
+
+    def test_health_full_low_hit_ratio_degrades(self, auth_headers, monkeypatch):
+        """H18: cache hit_ratio < 5% over 50+ lookups → degraded."""
+        from fapiao_cn.cache import ParseResultCache
+
+        # Force low hit ratio by pre-populating cache with all misses.
+        cache = ParseResultCache(capacity=128)
+        for _ in range(60):
+            cache.misses += 1
+        # 0 hits, 60 misses → hit_ratio = 0
+        monkeypatch.setattr("fapiao_cn.server.get_cache", lambda: cache)
+        resp = client.get("/health/full", headers=auth_headers)
+        assert resp.status_code == 503
+        data = resp.json()
+        assert data["checks"]["cache_low_hit_ratio"] is True
+
+    def test_health_full_independent_of_cwd(self, auth_headers, monkeypatch, tmp_path):
+        """H22: /health/full must work regardless of process cwd."""
+        monkeypatch.chdir(tmp_path)
+        resp = client.get("/health/full", headers=auth_headers)
+        # Should not crash with FileNotFoundError on relative paths.
+        assert resp.status_code in (200, 503)
+
 
 class TestFormats:
     def test_formats_returns_dict(self, auth_headers):

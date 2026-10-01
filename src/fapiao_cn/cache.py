@@ -77,6 +77,11 @@ class ParseResultCache:
                 "enabled": self._capacity > 0,
             }
 
+    # Allow tests / cache reload to inspect the capacity field.
+    @property
+    def capacity(self) -> int:
+        return self._capacity
+
 
 # ── Module-level singleton ──────────────────────────────────────────
 _cache: Optional[ParseResultCache] = None
@@ -97,6 +102,27 @@ def get_cache() -> ParseResultCache:
                 from fapiao_cn.config import settings
                 _cache = ParseResultCache(settings.cache_size)
     return _cache
+
+
+def reload_if_settings_changed() -> bool:
+    """H42: rebuild the cache singleton if settings.cache_size changed.
+
+    Called periodically (and on SIGHUP) so an operator can resize the
+    cache without restarting the service.  Returns True when a rebuild
+    happened.
+    """
+
+    global _cache
+    from fapiao_cn.config import settings
+
+    with _cache_lock:
+        if _cache is None:
+            _cache = ParseResultCache(settings.cache_size)
+            return True
+        if _cache._capacity != max(0, settings.cache_size):
+            _cache = ParseResultCache(settings.cache_size)
+            return True
+        return False
 
 
 def reset_cache_for_tests(capacity: int | None = None) -> ParseResultCache:
