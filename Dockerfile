@@ -17,11 +17,11 @@ RUN if [ -n "$PIP_INDEX_URL" ]; then \
       pip download --no-cache-dir \
         --index-url "$PIP_INDEX_URL" \
         --dest /wheels \
-        pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml; \
+        pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml defusedxml; \
     else \
       pip download --no-cache-dir \
         --dest /wheels \
-        pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml; \
+        pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml defusedxml; \
     fi
 
 # ── Stage 2: runtime ────────────────────────────────────────────────
@@ -55,7 +55,7 @@ COPY --from=builder /wheels /wheels
 
 # 装运行时依赖 + 项目本体（本地 wheel，不联网）
 RUN pip install --no-cache-dir --no-index --find-links=/wheels \
-        pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml \
+        pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml defusedxml \
  && pip install --no-cache-dir --no-index --no-deps --find-links=/wheels fapiao_cn \
  && rm -rf /wheels
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict
 
 import pytest
@@ -361,7 +362,7 @@ EXPECTED: Dict[str, dict] = {
         amount_without_tax="4516.51",
         tax_amount="45.17",
         total_amount="4561.68",
-        total_amount_upper="肆仟陆拾壹圆陆角捌分",
+        total_amount_upper="肆仟伍佰陆拾壹圆陆角捌分",
         drawer="龙艳",
     ),
     "销_产品_01.xml": dict(
@@ -407,16 +408,22 @@ def _auth_env(monkeypatch):
     固化为实例属性——直接 set 回去更直接。
     """
 
+    # H1 LFI 防护默认禁用 file_path 输入；测试套件需要读取仓库根目录的
+    # samples/，故在 fixture 期间显式打开白名单。涉及 file_path 安全检查的
+    # 专项测试会临时清空该值以验证「白名单为空时全部拒绝」的语义。
+    samples_root = str((Path(__file__).resolve().parent.parent / "samples").resolve())
     saved = {
         "api_auth_enabled": settings.api_auth_enabled,
         "api_keys": settings.api_keys,
         "api_keys_file": settings.api_keys_file,
         "api_legacy_allow": settings.api_legacy_allow,
+        "allowed_file_paths": settings.allowed_file_paths,
     }
     settings.api_auth_enabled = True
     settings.api_keys = f"{TEST_API_KEY},{TEST_EXTRACT_KEY}"
     settings.api_keys_file = ""
     settings.api_legacy_allow = False
+    settings.allowed_file_paths = samples_root
     reset_key_store_for_tests()
     reset_rate_limiter_for_tests()
     yield

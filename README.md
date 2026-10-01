@@ -230,6 +230,8 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 
 `key_id` 是 `sha256(key)[:8]`，原 key 不落盘。Docker / K8s secret 用 mount 文件路径即可，**镜像不包含任何 key**：
 
+> ⚠️ **关于本地 `keys.json` / `.env`**:两者均已 `.gitignore` 排除,不会进入 git 历史。但仓库根目录下的 `keys.json` 是开发测试副本——若与生产工作目录共用,可能误传到运维环境。**生产部署请用 secret manager / K8s Secret / Vault 注入,**不要**把 `keys.json` 复制进镜像,也不要把它和真实生产文件备份到一起。**
+
 ```yaml
 # docker-compose.yml
 volumes:

@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     cors_allow_methods: str = "GET,POST,OPTIONS"
     cors_allow_headers: str = "Content-Type,Authorization"
 
+    # file_path 输入白名单 (FC_ALLOWED_FILE_PATHS) —— CSV 目录列表。
+    # 留空时 file_path 输入被完全禁用(H1 LFI 防护);非空时仅允许
+    # resolve() 后落在任一白名单根目录内的文件,符号链接与 ../ 同步拦截。
+    allowed_file_paths: str = ""
+
     # API 鉴权 (FC_API_*)
     # 双轨模式：
     #   - FC_API_KEYS 优先（逗号分隔，简单模式，全部为 extract 作用域，用默认 rpm/burst）

@@ -504,6 +504,36 @@ class TestXmlParser:
 
         assert parse_xml_invoice(b"<Root><Other/></Root>") is None
 
+    def test_parse_xml_xxe_external_entity_blocked(self):
+        """H14: external entity declarations must not be expanded."""
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        xxe = (
+            b'<?xml version="1.0"?>\n'
+            b'<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>\n'
+            b'<EInvoice><EInvoiceData>'
+            b'<SellerInformation><SellerName>&xxe;</SellerName></SellerInformation>'
+            b'</EInvoiceData></EInvoice>'
+        )
+        # defusedxml raises DefusedXmlDtdsForbidden / EntitiesForbidden; we
+        # swallow and return None.
+        assert parse_xml_invoice(xxe) is None
+
+    def test_parse_xml_billion_laughs_blocked(self):
+        """H14: exponential entity expansion must be blocked."""
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        bl = (
+            b'<?xml version="1.0"?>\n'
+            b'<!DOCTYPE lolz [<!ENTITY lol "lol">'
+            b'<!ENTITY lol2 "&lol;&lol;&lol;&lol;">'
+            b'<!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;">]>\n'
+            b'<EInvoice><EInvoiceData>'
+            b'<SellerInformation><SellerName>&lol3;</SellerName></SellerInformation>'
+            b'</EInvoiceData></EInvoice>'
+        )
+        assert parse_xml_invoice(bl) is None
+
 
 class TestXmlFormatDate:
     def test_iso_date(self):

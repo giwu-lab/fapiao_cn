@@ -11,12 +11,15 @@ Notes:
 * ``page_count`` is set to 1 (XML invoices are a single logical page).
 * The returned record is passed through ``.stripped()`` for whitespace
   consistency with the PDF pipeline.
+* XML parsing goes through ``defusedxml`` to neutralise XXE /
+  billion-laughs style attacks (H14).
 """
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from typing import Optional, Union
+
+import defusedxml.ElementTree as DET
 
 from fapiao_cn.schemas import InvoiceRecord
 from fapiao_cn.utils import normalize_issue_date
@@ -30,17 +33,18 @@ def parse_xml_invoice(xml_input: Union[bytes, str]) -> Optional[InvoiceRecord]:
     * ``str``    -- either raw XML text (starting with ``<`` / ``<?xml``)
                     or a filesystem path
 
-    Returns ``None`` if the document is not a well-formed ``EInvoice``.
+    Returns ``None`` if the document is not a well-formed ``EInvoice``
+    or contains a malicious DOCTYPE / entity declaration.
     """
 
     try:
         if isinstance(xml_input, bytes):
-            root = ET.fromstring(xml_input.decode("utf-8"))
+            root = DET.fromstring(xml_input.decode("utf-8"))
         elif isinstance(xml_input, str):
             if xml_input.lstrip().startswith("<"):
-                root = ET.fromstring(xml_input)
+                root = DET.fromstring(xml_input)
             else:
-                root = ET.parse(xml_input).getroot()
+                root = DET.parse(xml_input).getroot()
         else:
             return None
     except Exception:
@@ -77,7 +81,7 @@ def _label_name(parent, *tags: str) -> str:
     return ""
 
 
-def _detect_invoice_type(root: ET.Element) -> str:
+def _detect_invoice_type(root: DET.Element) -> str:
     """Derive ``invoice_type`` from ``Header/InherentLabel`` LabelName tags.
 
     Combines ``EInvoiceType/LabelName`` (typically "电子发票") with
@@ -110,7 +114,7 @@ def _format_date(date_str: str) -> str:
     return normalize_issue_date(date_str)
 
 
-def _extract_invoice(root: ET.Element) -> Optional[InvoiceRecord]:
+def _extract_invoice(root: DET.Element) -> Optional[InvoiceRecord]:
     """Extract ``InvoiceRecord`` fields from a parsed ``EInvoice`` XML root."""
 
     eid = root.find("EInvoiceData")
