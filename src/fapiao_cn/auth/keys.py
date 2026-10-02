@@ -38,6 +38,16 @@ class KeyStoreError(RuntimeError):
     """
 
 
+def _compute_key_id(key: str) -> str:
+    """``sha256(key)[:8]`` — short, irreversible, used in audit logs.
+
+    Public so tests + the ``scripts/show_key_ids.py`` operator tool can
+    reproduce the same fingerprint without importing the dataclass.
+    """
+
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+
+
 @dataclass(frozen=True)
 class KeyRecord:
     """单把 key 的元数据。"""
@@ -49,12 +59,15 @@ class KeyRecord:
     burst: int
     # H12：verify 端点单独限速，0 表示沿用 rpm
     verify_rpm: int = 0
+    # 启动期计算/校验后的 8 字符 sha256 前缀。审计日志里的 `key=` 字段。
+    # 调用方不需要提供；缺省时从 `key` 自动派生。仅当 JSON 文件中显式填
+    # 了不一致的值时启动会失败（fail-fast 防止配置漂移）。
+    key_id: str = ""
 
-    @property
-    def key_id(self) -> str:
-        """短、不可逆、用于日志的 key 标识（sha256 前 8 位）。"""
-
-        return hashlib.sha256(self.key.encode("utf-8")).hexdigest()[:8]
+    def __post_init__(self) -> None:
+        # `key_id` 必须永远是 8 字符；缺失则派生，写回实例。
+        if not self.key_id:
+            object.__setattr__(self, "key_id", _compute_key_id(self.key))
 
 
 class KeyStore:
@@ -209,6 +222,28 @@ class KeyStore:
                 raise KeyStoreError(
                     f"FC_API_KEYS_FILE={path} keys[{idx}].verify_rpm invalid: {exc}"
                 ) from exc
+            # ``key_id`` 是派生字段，启动期自动填；若 JSON 显式填了必须
+            # 与 sha256(key)[:8] 一致（防配置漂移 = 防输入精确滴答）。
+            declared_key_id = str(item.get("key_id", "")).strip()
+            if declared_key_id:
+                expected_key_id = _compute_key_id(key)
+                if declared_key_id != expected_key_id:
+                    raise KeyStoreError(
+                        f"FC_API_KEYS_FILE={path} keys[{idx}].key_id "
+                        f"mismatched_key_id: declared={declared_key_id!r} "
+                        f"but sha256({key!r})[:8]={expected_key_id!r}; "
+                        f"either remove the field (auto-computed) or fix the "
+                        f"value. Use scripts/show_key_ids.py to regenerate."
+                    )
+                final_key_id = expected_key_id
+            else:
+                final_key_id = _compute_key_id(key)
+                log.debug(
+                    "keys[%d] label=%s: key_id auto-computed=%s",
+                    idx,
+                    label,
+                    final_key_id,
+                )
             records.append(
                 KeyRecord(
                     key=key,
@@ -217,6 +252,7 @@ class KeyStore:
                     rpm=max(1, rpm),
                     burst=max(1, burst),
                     verify_rpm=max(0, verify_rpm),
+                    key_id=final_key_id,
                 )
             )
 

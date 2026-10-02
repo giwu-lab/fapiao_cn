@@ -605,7 +605,7 @@ class TestXmlParser:
     def test_parse_xml_bytes(self):
         from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
 
-        with open("samples/购_材料_01.xml", "rb") as f:
+        with open("samples/全电发票-XML/购_材料_01.xml", "rb") as f:
             rec = parse_xml_invoice(f.read())
         assert rec is not None
         assert rec.invoice_type == "电子发票（增值税专用发票）"
@@ -616,7 +616,7 @@ class TestXmlParser:
     def test_parse_xml_vat_special(self):
         from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
 
-        with open("samples/销_产品_01.xml", "rb") as f:
+        with open("samples/全电发票-XML/销_产品_01.xml", "rb") as f:
             rec = parse_xml_invoice(f.read())
         assert rec.invoice_type == "电子发票（增值税专用发票）"
         assert rec.buyer_name == "新大洲本田摩托（苏州）有限公司"
@@ -625,7 +625,7 @@ class TestXmlParser:
     def test_parse_xml_common(self):
         from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
 
-        with open("samples/购_油品_01.xml", "rb") as f:
+        with open("samples/全电发票-XML/购_油品_01.xml", "rb") as f:
             rec = parse_xml_invoice(f.read())
         assert rec.invoice_type == "电子发票（普通发票）"
         assert rec.payee == ""
@@ -635,7 +635,7 @@ class TestXmlParser:
     def test_parse_xml_page_count(self):
         from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
 
-        with open("samples/购_零售_01.xml", "rb") as f:
+        with open("samples/全电发票-XML/购_零售_01.xml", "rb") as f:
             rec = parse_xml_invoice(f.read())
         assert rec.page_count == 1
 
@@ -742,3 +742,136 @@ class TestXmlDetectInvoiceType:
 
         root = ET.fromstring("<EInvoice><Header/></EInvoice>")
         assert _detect_invoice_type(root) == ""
+
+
+class TestOfdParser:
+    """Unit tests for ``fapiao_cn.parsers.ofd_invoice``."""
+
+    def test_parse_ofd_vat_special(self):
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        path = (
+            "samples/全电发票-OFD/"
+            "dzfp_25502000000126087334_重庆市旺成科技股份有限公司_20251204095208.ofd"
+        )
+        with open(path, "rb") as f:
+            rec = parse_ofd_invoice(f.read())
+        assert rec is not None
+        # The CustomTag-driven path matches the paired XML invoice record.
+        # ``invoice_type`` is recovered from the template-layer (Tpls/)
+        # banner because the CustomTag dictionary doesn't carry it.
+        assert rec.invoice_type == "电子发票（增值税专用发票）"
+        assert rec.invoice_number == "25502000000126087334"
+        assert rec.issue_date == "2025-11-21"
+        assert rec.buyer_name == "新大洲本田摩托（苏州）有限公司"
+        assert rec.buyer_tax_id == "91320585MA1T6M1R5F"
+        assert rec.seller_name == "重庆市旺成科技股份有限公司"
+        assert rec.seller_tax_id == "91500106622015389N"
+        assert rec.amount_without_tax == "5340673.44"
+        assert rec.tax_amount == "694287.61"
+        assert rec.total_amount == "6034961.05"
+        assert rec.drawer == "周妍伶"
+
+    def test_parse_ofd_layout_fallback(self):
+        """烤鱼店样张没有 CustomTag.xml;走布局兜底分支。"""
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        with open("samples/全电发票-OFD/烤匠电子发票_332.60元_龚健武.ofd", "rb") as f:
+            rec = parse_ofd_invoice(f.read())
+        assert rec is not None
+        assert rec.invoice_type == "电子发票（普通发票）"
+        assert rec.invoice_number == "26507000000257250590"
+        assert rec.issue_date == "2026-09-26"
+        assert rec.buyer_name == "龚健武（个人）"
+        assert rec.seller_name == "重庆福烤餐饮服务有限公司"
+        assert rec.seller_tax_id == "91500103MADHB6TU2B"
+        assert rec.amount_without_tax == "313.77"
+        assert rec.tax_amount == "18.83"
+        assert rec.total_amount == "332.60"
+        assert rec.drawer == "苟艳"
+
+    def test_parse_ofd_garbage_bytes(self):
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        assert parse_ofd_invoice(b"") is None
+        assert parse_ofd_invoice(b"<<not a zip>>") is None
+        assert parse_ofd_invoice(b"PK\x03\x04not-a-real-zip") is None
+
+    def test_parse_ofd_missing_document_xml(self):
+        """A ZIP without ``Doc_0/Document.xml`` should be rejected cleanly."""
+        import io
+        import zipfile
+
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("readme.txt", "no document here")
+        assert parse_ofd_invoice(buf.getvalue()) is None
+
+    def test_parse_ofd_zip_bomb_too_many_entries(self):
+        """Defend against central-directory flooding."""
+        import io
+        import zipfile
+
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for i in range(70):
+                z.writestr(f"file_{i}.txt", "x")
+        assert parse_ofd_invoice(buf.getvalue()) is None
+
+    def test_parse_ofd_huge_member_rejected(self):
+        """A 12 MiB single member must be rejected before decompression."""
+        import io
+        import zipfile
+
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        buf = io.BytesIO()
+        # Stash 12 MiB of zeros so getinfo().file_size > _MAX_ENTRY_SIZE.
+        huge = b"\0" * (12 * 1024 * 1024)
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+            z.writestr("Doc_0/Document.xml", huge)
+        assert parse_ofd_invoice(buf.getvalue()) is None
+
+    def test_parse_ofd_no_invoice_signal(self):
+        """An OFD-shaped archive with no TaxInfo/CustomTag falls back to
+        layout scanning; if neither strategy finds an invoice number the
+        record comes back with empty fields but still as a non-None
+        InvoiceRecord (or None depending on the heuristic).  Both are
+        acceptable; we just check it doesn't crash.
+        """
+
+        import io
+        import zipfile
+
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        # Build an OFD-shaped zip with garbage Content.xml; parser should
+        # return None (no invoice signal).
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr(
+                "OFD.xml",
+                '<?xml version="1.0"?><ofd:OFD xmlns:ofd="http://www.ofdspec.org/2016"/>',
+            )
+            z.writestr(
+                "Doc_0/Document.xml",
+                '<?xml version="1.0"?>'
+                '<ofd:Document xmlns:ofd="http://www.ofdspec.org/2016">'
+                '<ofd:Pages><ofd:Page ID="3" BaseLoc="Pages/Page_0/Content.xml"/></ofd:Pages>'
+                '<ofd:CommonData><ofd:MaxUnitID>1</ofd:MaxUnitID></ofd:CommonData>'
+                '</ofd:Document>',
+            )
+            z.writestr(
+                "Doc_0/Pages/Page_0/Content.xml",
+                '<?xml version="1.0"?>'
+                '<ofd:Page xmlns:ofd="http://www.ofdspec.org/2016"><ofd:Content/>'
+                "</ofd:Page>",
+            )
+        rec = parse_ofd_invoice(buf.getvalue())
+        # No invoice signal ⇒ either None or an empty record.  Both are
+        # acceptable; we just don't want to crash.
+        assert rec is None or rec.invoice_number == ""

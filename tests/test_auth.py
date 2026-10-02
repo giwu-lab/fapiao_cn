@@ -48,6 +48,123 @@ class TestKeyRecord:
         r2 = KeyRecord(key="abd", label="x", scopes=frozenset({SCOPE_EXTRACT}), rpm=60, burst=10)
         assert r1.key_id != r2.key_id
 
+    def test_key_id_auto_computed_when_missing(self):
+        """Constructor omits ``key_id`` → derived from ``key`` via sha256[:8]."""
+        import hashlib
+
+        expected = hashlib.sha256(b"auto-computed-key").hexdigest()[:8]
+        r = KeyRecord(
+            key="auto-computed-key",
+            label="auto",
+            scopes=frozenset({SCOPE_EXTRACT}),
+            rpm=60,
+            burst=10,
+        )
+        assert r.key_id == expected
+
+    def test_key_id_override_accepted_when_matches(self):
+        """Explicit ``key_id`` is accepted if it matches sha256[:8]."""
+        import hashlib
+
+        expected = hashlib.sha256(b"override-key").hexdigest()[:8]
+        r = KeyRecord(
+            key="override-key",
+            key_id=expected,
+            label="override",
+            scopes=frozenset({SCOPE_EXTRACT}),
+            rpm=60,
+            burst=10,
+        )
+        assert r.key_id == expected
+
+
+class TestKeyStoreJsonKeyId:
+    """``key_id`` field handling in FC_API_KEYS_FILE structured mode."""
+
+    def _write_keys_file(self, tmp_path, entries):
+        p = tmp_path / "keys.json"
+        p.write_text(json.dumps(entries), encoding="utf-8")
+        return p
+
+    def test_key_id_omitted_is_auto_filled(self, tmp_path, monkeypatch):
+        import hashlib
+
+        key = "auto-fill-me"
+        path = self._write_keys_file(
+            tmp_path,
+            [
+                {
+                    "key": key,
+                    "label": "auto",
+                    "scopes": ["extract"],
+                }
+            ],
+        )
+        monkeypatch.setattr(settings, "api_keys", "")
+        monkeypatch.setattr(settings, "api_keys_file", str(path))
+        reset_key_store_for_tests()
+        store = KeyStore.from_env()
+        assert len(store) == 1
+        rec = next(iter(store._records.values()))
+        assert rec.key_id == hashlib.sha256(key.encode()).hexdigest()[:8]
+
+    def test_key_id_correct_value_passes(self, tmp_path, monkeypatch):
+        import hashlib
+
+        key = "correct-match"
+        expected = hashlib.sha256(key.encode()).hexdigest()[:8]
+        path = self._write_keys_file(
+            tmp_path,
+            [
+                {
+                    "key": key,
+                    "key_id": expected,
+                    "label": "ok",
+                    "scopes": ["extract"],
+                }
+            ],
+        )
+        monkeypatch.setattr(settings, "api_keys", "")
+        monkeypatch.setattr(settings, "api_keys_file", str(path))
+        reset_key_store_for_tests()
+        store = KeyStore.from_env()
+        assert next(iter(store._records.values())).key_id == expected
+
+    def test_key_id_mismatch_raises(self, tmp_path, monkeypatch):
+        path = self._write_keys_file(
+            tmp_path,
+            [
+                {
+                    "key": "real-key",
+                    "key_id": "deadbeef",  # wrong on purpose
+                    "label": "bad",
+                    "scopes": ["extract"],
+                }
+            ],
+        )
+        monkeypatch.setattr(settings, "api_keys", "")
+        monkeypatch.setattr(settings, "api_keys_file", str(path))
+        reset_key_store_for_tests()
+        with pytest.raises(KeyStoreError) as exc_info:
+            KeyStore.from_env()
+        assert "mismatched_key_id" in str(exc_info.value)
+
+    def test_show_key_ids_script_matches_keys_json(self, monkeypatch):
+        """The operator helper regenerates the same key_id the system uses."""
+        import hashlib
+
+        key = "script-check-key"
+        expected = hashlib.sha256(key.encode()).hexdigest()[:8]
+        rec = KeyRecord(
+            key=key,
+            key_id=expected,
+            label="script-check",
+            scopes=frozenset({SCOPE_EXTRACT}),
+            rpm=60,
+            burst=10,
+        )
+        assert rec.key_id == expected
+
 
 class TestKeyStoreSimple:
     def test_simple_mode_loads_all_scopes(self):
@@ -224,7 +341,7 @@ class TestDevFallback:
         import os
 
         path = os.path.join(
-            os.path.dirname(__file__), "..", "samples", "购_材料_01.pdf"
+            os.path.dirname(__file__), "..", "samples", "新电子发票-标准", "购_材料_01.pdf"
         )
         resp = unauth_client.post("/extract", json={"file_path": path})
         assert resp.status_code == 200
@@ -307,7 +424,7 @@ class TestScopeEnforcement:
 
         client = TestClient(app)
         path = os.path.join(
-            os.path.dirname(__file__), "..", "samples", "购_材料_01.pdf"
+            os.path.dirname(__file__), "..", "samples", "新电子发票-标准", "购_材料_01.pdf"
         )
         resp = client.post(
             "/extract",

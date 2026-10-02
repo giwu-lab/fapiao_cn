@@ -1,13 +1,13 @@
 # fapiao_cn
 
-中国电子发票字段提取服务（HTTP API + Python lib）。基于 `pdfplumber`，覆盖 6 类票种 + XML 全电发票，无 JVM 依赖。
+中国电子发票字段提取服务（HTTP API + Python lib）。基于 `pdfplumber`，覆盖 6 类票种 + XML/OFD 全电发票，无 JVM 依赖。
 
 ## 快速开始
 
 ```bash
 # 生产（推荐）
 docker compose up -d
-curl -F file=@samples/购_材料_01.pdf http://localhost:8091/extract
+curl -F file=@samples/新电子发票-标准/购_材料_01.pdf http://localhost:8091/extract
 
 # 本地开发
 python3 -m venv .venv && source .venv/bin/activate
@@ -58,7 +58,7 @@ chmod 600 .env
 
 # 调用时带 key
 curl -H "Authorization: Bearer $(grep FC_API_KEYS .env | cut -d= -f2 | tr -d '\"')" \
-  http://localhost:8091/extract -F file=@samples/购_材料_01.pdf
+  http://localhost:8091/extract -F file=@samples/新电子发票-标准/购_材料_01.pdf
 ```
 
 详见「API 鉴权」章节。
@@ -67,7 +67,7 @@ curl -H "Authorization: Bearer $(grep FC_API_KEYS .env | cut -d= -f2 | tr -d '\"
 
 ```python
 from fapiao_cn import parse_pdf
-resp = parse_pdf(open("samples/购_材料_01.pdf", "rb").read(), filename="购_材料_01.pdf")
+resp = parse_pdf(open("samples/新电子发票-标准/购_材料_01.pdf", "rb").read(), filename="购_材料_01.pdf")
 print(resp.seller_name, resp.total_amount, resp.message)
 ```
 
@@ -80,7 +80,7 @@ print(resp.seller_name, resp.total_amount, resp.message)
 | GET | `/formats` | 支持的全部票种 |
 | POST | `/extract` | 单文件提取 |
 | POST | `/extract/batch` | 批量提取（并行，按输入顺序返回） |
-| POST | `/raw` | 仅返回 PDF 原始文本，XML 拒绝 |
+| POST | `/raw` | 仅返回 PDF 原始文本，XML/OFD 拒绝 |
 | POST | `/verify` | 国税查验代理（需 `FC_VERIFY_ENABLED=true`） |
 | POST | `/extract-and-verify` | 提取 + 查验一站式 |
 
@@ -88,11 +88,11 @@ print(resp.seller_name, resp.total_amount, resp.message)
 
 ```bash
 # multipart
-curl -F "file=@samples/购_材料_01.pdf" http://localhost:8091/extract
+curl -F "file=@samples/新电子发票-标准/购_材料_01.pdf" http://localhost:8091/extract
 
 # JSON
 curl -H "Content-Type: application/json" \
-  -d '{"file_path": "samples/购_材料_01.pdf"}' \
+  -d '{"file_path": "samples/新电子发票-标准/购_材料_01.pdf"}' \
   http://localhost:8091/extract
 
 # /raw 响应
@@ -135,6 +135,7 @@ curl -H "Content-Type: application/json" \
 | `"error: file_too_large: X > Y bytes"` | 422 | 超过大小限制 |
 | `"error: parse_failed: <exc>"` | 422 | pdfplumber 解析异常 |
 | `"error: xml_parse_failed: ..."` | 422 | XML 畸形 |
+| `"error: ofd_parse_failed: ..."` | 422 | OFD 容器/ZIP/XML 异常或非数电发票 |
 | `"error: internal_error: <exc>"` | 500 | 服务器内部异常 |
 
 HTTP 422 响应体就是 `ExtractResponse` / `PdfRaw`，错误字符串完整保留在 `message` 字段。400 / 500 / 502-503 仍走 FastAPI 的 `{"detail": ...}` 信封。
@@ -168,8 +169,8 @@ HTTP 422 响应体就是 `ExtractResponse` / `PdfRaw`，错误字符串完整保
 服务端点（除 `/health`）默认需要 API Key，Header 两种形式任选：
 
 ```bash
-curl -H "Authorization: Bearer $FC_KEY" http://localhost:8091/extract -F file=@samples/购_材料_01.pdf
-curl -H "X-API-Key: $FC_KEY"            http://localhost:8091/extract -F file=@samples/购_材料_01.pdf
+curl -H "Authorization: Bearer $FC_KEY" http://localhost:8091/extract -F file=@samples/新电子发票-标准/购_材料_01.pdf
+curl -H "X-API-Key: $FC_KEY"            http://localhost:8091/extract -F file=@samples/新电子发票-标准/购_材料_01.pdf
 ```
 
 ### 配置 Key
@@ -199,7 +200,7 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 ]
 ```
 
-字段：`key`（≥ 32 字节随机串，`openssl rand -base64 32`）/ `label`（写审计日志）/ `scopes`（`admin` 自动获得其他所有）/ `rpm` / `burst`。
+字段：`key`（≥ 32 字节随机串，`openssl rand -base64 32`）/ `key_id`（审计日志里 `key=` 的 8 字符 sha256 前缀；**可选填**，填了启动期必须与 `sha256(key)[:8]` 一致，否则 `KeyStoreError: mismatched_key_id`。运维可填便于一眼对应；缺省填则启动期自动派生）/ `label`（写审计日志）/ `scopes`（`admin` 自动获得其他所有）/ `rpm` / `burst`。
 
 ### Scope → 端点
 
@@ -230,6 +231,13 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 
 `key_id` 是 `sha256(key)[:8]`，原 key 不落盘。Docker / K8s secret 用 mount 文件路径即可，**镜像不包含任何 key**：
 
+```
+# 在 audit.log 里看到 key=339740cb？反查对应 label + 截短的 key：
+python3 scripts/show_key_ids.py keys.json
+# label              key_id     key (trunc)      status
+# frontend-spa       339740cb   OpEAA5V6qoPKSE…  match
+```
+
 > ⚠️ **关于本地 `keys.json` / `.env`**:两者均已 `.gitignore` 排除,不会进入 git 历史。但仓库根目录下的 `keys.json` 是开发测试副本——若与生产工作目录共用,可能误传到运维环境。**生产部署请用 secret manager / K8s Secret / Vault 注入,**不要**把 `keys.json` 复制进镜像,也不要把它和真实生产文件备份到一起。**
 
 ```yaml
@@ -247,7 +255,9 @@ fapiao_cn test                              # 控制台脚本
 python -m pytest tests/ -v                  # 直接 pytest
 ```
 
-235 条用例覆盖 `samples/` 下 34 个样本（29 PDF + 5 XML）。
+236 条用例覆盖 `samples/` 下 36 个样本（29 PDF + 5 XML + 2 OFD）。
+
+> `samples/` 按票种子目录组织：`新电子发票-标准/` / `新电子发票-旧格式/` / `成品油合并代码/` / `铁路电子客票/` / `航空运输电子客票/` / `中央非税收入统一票据/` / `全电发票-XML/` / `全电发票-OFD/` + 未接入解析器的 `报关单/`。完整归类表见 [`samples/SAMPLES_INDEX.md`](samples/SAMPLES_INDEX.md)（由 `scripts/sync_samples_layout.py --regen-index` 自动维护）。
 
 ## 解析器
 
@@ -259,6 +269,7 @@ python -m pytest tests/ -v                  # 直接 pytest
 | `parsers/airline_ticket.py` | 航空运输电子客票行程单 |
 | `parsers/train_ticket.py` | 铁路电子客票 |
 | `parsers/non_tax_receipt.py` | 中央非税收入统一票据（专利年费等） |
-| `parsers/xml_invoice.py` | XML 全电发票 |
+| `parsers/xml_invoice.py` | XML 全电发票（`EInvoice` schema） |
+| `parsers/ofd_invoice.py` | OFD 全电票 (GB/T 33190，结构化 `CustomTag.xml` + 布局兜底) |
 
-> ⚠️ **H43: XML schema 同步责任**:`parsers/xml_invoice.py` 通过 `defusedxml.ElementTree` 解析 XML 文档,字段名（如 `SellerInformation/SellerName`、`BasicInformation/TotalTax-includedAmount`）与发票平台当前的 ``EInvoice`` schema **硬编码对应**。若国家税务总局 / 发票平台升级 schema（命名空间 URI 变化、字段重命名等）需要手动同步本文件。建议在升级前先跑一次 XML 样本回归。
+> ⚠️ **H43: XML schema 同步责任**:`parsers/xml_invoice.py` 通过 `defusedxml.ElementTree` 解析 XML 文档,字段名（如 `SellerInformation/SellerName`、`BasicInformation/TotalTax-includedAmount`）与发票平台当前的 ``EInvoice`` schema **硬编码对应**。若国家税务总局 / 发票平台升级 schema（命名空间 URI 变化、字段重命名等）需要手动同步本文件（同时影响 `parsers/ofd_invoice.py`,因为 OFD 内部嵌入的 `<EInvoice>` 复用同一 schema）。建议在升级前先跑一次 XML/OFD 样本回归。

@@ -54,7 +54,7 @@ class TestPipelineRun:
     def test_run_returns_parse_result(self):
         from fapiao_cn.pipeline import run
 
-        with open("samples/购_材料_01.pdf", "rb") as f:
+        with open("samples/新电子发票-标准/购_材料_01.pdf", "rb") as f:
             result = run(f.read())
         assert result.record is not None
         assert result.record.invoice_number
@@ -62,7 +62,7 @@ class TestPipelineRun:
     def test_run_with_raw(self):
         from fapiao_cn.pipeline import run
 
-        with open("samples/购_材料_01.pdf", "rb") as f:
+        with open("samples/新电子发票-标准/购_材料_01.pdf", "rb") as f:
             result = run(f.read(), with_raw=True)
         assert result.pdf_raw is not None
         assert result.pdf_raw.text
@@ -73,12 +73,52 @@ class TestXmlPipeline:
     """XML e-invoice end-to-end parsing through ``fapiao_cn.formats.parse_pdf``."""
 
     XML_FILES = [
-        "购_材料_01.xml",
-        "购_油品_01.xml",
-        "购_油品_02.xml",
-        "购_零售_01.xml",
-        "销_产品_01.xml",
+        "全电发票-XML/购_材料_01.xml",
+        "全电发票-XML/购_油品_01.xml",
+        "全电发票-XML/购_油品_02.xml",
+        "全电发票-XML/购_零售_01.xml",
+        "全电发票-XML/销_产品_01.xml",
     ]
+
+
+class TestOfdPipeline:
+    """OFD 数电票 end-to-end parsing through ``fapiao_cn.formats.parse_pdf``."""
+
+    OFD_FILES = [
+        "全电发票-OFD/dzfp_25502000000126087334_重庆市旺成科技股份有限公司_20251204095208.ofd",
+        "全电发票-OFD/烤匠电子发票_332.60元_龚健武.ofd",
+    ]
+
+    def test_ofd_files_have_expected_fields(self, filename: str, expected: dict):
+        from fapiao_cn.formats import parse_pdf
+
+        with open(f"samples/{filename}", "rb") as f:
+            resp = parse_pdf(f.read(), filename=filename)
+        assert resp.message == "success", f"{filename}: {resp.message}"
+        for field, expected_val in expected.items():
+            actual = getattr(resp, field)
+            assert actual == expected_val, (
+                f"[{filename}] {field}: expected {expected_val!r}, got {actual!r}"
+            )
+
+    @pytest.mark.parametrize(
+        "filename,expected_pages",
+        [
+            ("全电发票-OFD/烤匠电子发票_332.60元_龚健武.ofd", 1),
+            (
+                "全电发票-OFD/dzfp_25502000000126087334_重庆市旺成科技股份有限公司_20251204095208.ofd",
+                2,
+            ),
+        ],
+    )
+    def test_ofd_page_count_matches_document(
+        self, filename: str, expected_pages: int
+    ):
+        from fapiao_cn.formats import parse_pdf
+
+        with open(f"samples/{filename}", "rb") as f:
+            resp = parse_pdf(f.read(), filename=filename)
+        assert resp.page_count == expected_pages
 
     def test_xml_files_have_expected_fields(self, filename: str, expected: dict):
         from fapiao_cn.formats import parse_pdf
@@ -93,8 +133,11 @@ class TestXmlPipeline:
             )
 
     def test_xml_page_count_is_one(self, filename: str, expected: dict):
+        """XML 数电票是逻辑单页;PDF/OFD 各自有专属测试,这里跳过."""
         from fapiao_cn.formats import parse_pdf
 
+        if not filename.endswith(".xml"):
+            pytest.skip("PDF/OFD page counts vary; see dedicated tests")
         with open(f"samples/{filename}", "rb") as f:
             resp = parse_pdf(f.read(), filename=filename)
         assert resp.page_count == 1
@@ -103,7 +146,7 @@ class TestXmlPipeline:
         """Magic-byte detection should accept XML content even without .xml suffix."""
         from fapiao_cn.formats import parse_pdf
 
-        with open("samples/购_油品_01.xml", "rb") as f:
+        with open("samples/全电发票-XML/购_油品_01.xml", "rb") as f:
             contents = f.read()
         resp = parse_pdf(contents, filename="invoice")  # no .xml
         assert resp.message == "success"
@@ -113,7 +156,7 @@ class TestXmlPipeline:
         """Filename extension should take precedence over content sniffing."""
         from fapiao_cn.formats import parse_pdf
 
-        with open("samples/购_材料_01.xml", "rb") as f:
+        with open("samples/全电发票-XML/购_材料_01.xml", "rb") as f:
             contents = f.read()
         resp = parse_pdf(contents, filename="some.pdf")
         # filename says .pdf but content is XML — content wins (magic bytes).
@@ -169,7 +212,7 @@ class TestLazyWords:
 
         from fapiao_cn.pipeline import run
 
-        with open("samples/购_材料_01.pdf", "rb") as f:
+        with open("samples/新电子发票-标准/购_材料_01.pdf", "rb") as f:
             contents = f.read()
 
         with patch("pdfplumber.page.Page.extract_words") as mock_words:
@@ -185,7 +228,7 @@ class TestLazyWords:
 
         from fapiao_cn.pipeline import run
 
-        with open("samples/购_油品_01.pdf", "rb") as f:
+        with open("samples/成品油合并代码/购_油品_01.pdf", "rb") as f:
             contents = f.read()
 
         with patch("pdfplumber.page.Page.extract_words") as mock_words:

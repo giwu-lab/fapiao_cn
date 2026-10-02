@@ -100,7 +100,7 @@ class TestFormats:
 
 class TestExtract:
     def test_extract_with_file_upload(self, auth_headers):
-        path = os.path.join(_TEST_DIR, "购_材料_01.pdf")
+        path = os.path.join(_TEST_DIR, "新电子发票-标准", "购_材料_01.pdf")
         with open(path, "rb") as f:
             resp = client.post(
                 "/extract",
@@ -114,7 +114,7 @@ class TestExtract:
         assert data["seller_name"]
 
     def test_extract_with_file_path_json(self, auth_headers):
-        path = os.path.join(_TEST_DIR, "购_材料_01.pdf")
+        path = os.path.join(_TEST_DIR, "新电子发票-标准", "购_材料_01.pdf")
         resp = client.post("/extract", json={"file_path": path}, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
@@ -123,7 +123,7 @@ class TestExtract:
 
     def test_extract_with_raw_true(self, auth_headers):
         """``/raw`` 端点单独提供原始 PDF 文本。"""
-        path = os.path.join(_TEST_DIR, "购_材料_01.pdf")
+        path = os.path.join(_TEST_DIR, "新电子发票-标准", "购_材料_01.pdf")
         resp = client.post("/raw", json={"file_path": path}, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
@@ -132,7 +132,7 @@ class TestExtract:
 
     @pytest.mark.xfail(reason="schema: 'warnings' replaced by 'message'", strict=False)
     def test_extract_returns_all_expected_keys(self, auth_headers):
-        path = os.path.join(_TEST_DIR, "购_材料_01.pdf")
+        path = os.path.join(_TEST_DIR, "新电子发票-标准", "购_材料_01.pdf")
         with open(path, "rb") as f:
             resp = client.post(
                 "/extract",
@@ -156,8 +156,9 @@ class TestExtract:
     def test_extract_multiple_formats(self, auth_headers):
         """Verify all known invoice types parse without error."""
         files = [
-            "购_材料_01.pdf", "购_材料_02.pdf", "购_租赁_01.pdf",
-            "购_油品_01.pdf", "航_运输_01.pdf", "购_自来水_01.pdf",
+            "新电子发票-标准/购_材料_01.pdf", "新电子发票-旧格式/购_材料_02.pdf",
+            "新电子发票-标准/购_租赁_01.pdf", "成品油合并代码/购_油品_01.pdf",
+            "航空运输电子客票/航_运输_01.pdf", "新电子发票-标准/购_自来水_01.pdf",
         ]
         for fname in files:
             path = os.path.join(_TEST_DIR, fname)
@@ -199,7 +200,7 @@ class TestXmlApi:
     """API integration tests for XML e-invoice format."""
 
     def test_xml_multipart_upload(self, auth_headers):
-        path = os.path.join(_TEST_DIR, "购_材料_01.xml")
+        path = os.path.join(_TEST_DIR, "全电发票-XML", "购_材料_01.xml")
         with open(path, "rb") as f:
             resp = client.post(
                 "/extract",
@@ -215,7 +216,7 @@ class TestXmlApi:
         assert data["page_count"] == 1
 
     def test_xml_file_path_json(self, auth_headers):
-        path = os.path.join(_TEST_DIR, "购_油品_01.xml")
+        path = os.path.join(_TEST_DIR, "全电发票-XML", "购_油品_01.xml")
         resp = client.post("/extract", json={"file_path": path}, headers=auth_headers)
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -225,7 +226,7 @@ class TestXmlApi:
 
     def test_xml_sales_invoice(self, auth_headers):
         """The 销_产品_01.xml sample has a sales-side (selling) invoice shape."""
-        path = os.path.join(_TEST_DIR, "销_产品_01.xml")
+        path = os.path.join(_TEST_DIR, "全电发票-XML", "销_产品_01.xml")
         resp = client.post("/extract", json={"file_path": path}, headers=auth_headers)
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -236,7 +237,7 @@ class TestXmlApi:
     @pytest.mark.xfail(reason="schema: 'warnings' replaced by 'message'", strict=False)
     def test_xml_response_keys_match_pdf(self, auth_headers):
         """XML responses must expose the same field set as PDF responses."""
-        path = os.path.join(_TEST_DIR, "购_零售_01.xml")
+        path = os.path.join(_TEST_DIR, "全电发票-XML", "购_零售_01.xml")
         with open(path, "rb") as f:
             resp = client.post(
                 "/extract",
@@ -261,3 +262,60 @@ class TestXmlApi:
         )
         assert resp.status_code == 422
         assert "xml_parse_failed" in resp.text
+
+
+class TestOfdApi:
+    """OFD 数电票 end-to-end via the HTTP API."""
+
+    OFD_NAME = "全电发票-OFD/烤匠电子发票_332.60元_龚健武.ofd"
+
+    def test_ofd_multipart_upload(self, auth_headers):
+        path = os.path.join(_TEST_DIR, self.OFD_NAME)
+        with open(path, "rb") as f:
+            resp = client.post(
+                "/extract",
+                headers=auth_headers,
+                files={
+                        "file": (
+                            "烤匠电子发票_332.60元_龚健武.ofd",
+                            f,
+                            "application/ofd",
+                        )
+                    },
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["invoice_number"] == "26507000000257250590"
+        assert data["seller_name"] == "重庆福烤餐饮服务有限公司"
+        assert data["total_amount"] == "332.60"
+        assert data["page_count"] == 1
+
+    def test_ofd_file_path_json(self, auth_headers):
+        path = os.path.join(_TEST_DIR, self.OFD_NAME)
+        resp = client.post(
+            "/extract", json={"file_path": path}, headers=auth_headers
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["invoice_number"] == "26507000000257250590"
+        assert data["amount_without_tax"] == "313.77"
+        assert data["tax_amount"] == "18.83"
+
+    def test_raw_ofd_returns_400(self, auth_headers):
+        """``/raw`` rejects OFD the same way it does XML."""
+        with open(
+            os.path.join(_TEST_DIR, self.OFD_NAME), "rb"
+        ) as f:
+            resp = client.post(
+                "/raw",
+                headers=auth_headers,
+                files={
+                        "file": (
+                            "烤匠电子发票_332.60元_龚健武.ofd",
+                            f,
+                            "application/ofd",
+                        )
+                    },
+            )
+        assert resp.status_code == 400
+        assert "raw_unsupported" in resp.json()["detail"]

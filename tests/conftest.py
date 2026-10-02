@@ -48,7 +48,7 @@ TEST_EXTRACT_KEY = "test-key-extract-only-do-not-use-in-prod"
 # Map of filename → expected fields (partial).  We only check the
 # fields that are stable and well-defined for each file.
 EXPECTED: Dict[str, dict] = {
-    "购_材料_01.pdf": dict(
+    "新电子发票-标准/购_材料_01.pdf": dict(
         invoice_type="电子发票（增值税专用发票）",
         invoice_number="25502000000129241041",
         issue_date="2025-11-27",
@@ -62,7 +62,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="壹拾肆万零壹佰肆拾壹圆零玖分",
         drawer="李春梅",
     ),
-    "购_材料_02.pdf": dict(
+    "新电子发票-旧格式/购_材料_02.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="14403260911012477509",
         issue_date="2026-05-29",
@@ -76,7 +76,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="贰佰陆拾元整",
         drawer="蓝桂涛",
     ),
-    "购_餐饮_02.pdf": dict(
+    "新电子发票-标准/购_餐饮_02.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26442000001385046691",
         issue_date="2026-02-04",
@@ -90,7 +90,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="玖佰玖拾捌圆整",
         drawer="吕亮平",
     ),
-    "购_餐饮_03.pdf": dict(
+    "新电子发票-标准/购_餐饮_03.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26317000001644463587",
         issue_date="2026-05-14",
@@ -108,7 +108,7 @@ EXPECTED: Dict[str, dict] = {
         reviewer="陈晨",
         drawer="汪兴平",
     ),
-    "购_材料_03.pdf": dict(
+    "新电子发票-标准/购_材料_03.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26322000001880018386",
         issue_date="2026-03-11",
@@ -122,7 +122,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="叁佰伍拾玖圆整",
         drawer="张宇松",
     ),
-    "购_自来水_01.pdf": dict(
+    "新电子发票-标准/购_自来水_01.pdf": dict(
         invoice_type="电子发票（增值税专用发票）",
         invoice_number="26502000001100907556",
         issue_date="2026-06-08",
@@ -136,7 +136,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="壹万陆仟壹佰玖拾捌圆整",
         drawer="高玉玲",
     ),
-    "购_租赁_01.pdf": dict(
+    "新电子发票-标准/购_租赁_01.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26137907690500263398",
         issue_date="2026-05-20",
@@ -150,7 +150,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="贰拾捌圆伍角贰分",
         drawer="田克",
     ),
-    "购_油品_01.pdf": dict(
+    "成品油合并代码/购_油品_01.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="05000170021193369231",
         issue_date="2026-05-20",
@@ -166,7 +166,7 @@ EXPECTED: Dict[str, dict] = {
         reviewer="王瑜",
         drawer="张丽艺",
     ),
-    "购_油品_03.pdf": dict(
+    "成品油合并代码/购_油品_03.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="05000170021193369673",
         issue_date="2026-06-11",
@@ -182,7 +182,7 @@ EXPECTED: Dict[str, dict] = {
         reviewer="王瑜",
         drawer="张丽艺",
     ),
-    "购_维修_01.pdf": dict(
+    "新电子发票-标准/购_维修_01.pdf": dict(
         invoice_type="电子发票（增值税专用发票）",
         invoice_number="26502000000235158361",
         issue_date="2026-02-06",
@@ -196,7 +196,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="伍仟圆整",
         drawer="岳维霄",
     ),
-    "购_通信_01.pdf": dict(
+    "新电子发票-标准/购_通信_01.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26507000000252287129",
         issue_date="2026-08-02",
@@ -210,7 +210,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount="358.00",
         total_amount_upper="叁佰伍拾捌圆整",
     ),
-    "京东大药房-01.pdf": dict(
+    "新电子发票-标准/京东大药房-01.pdf": dict(
         # 京东大药房变体：表头/标签字符在 pdfplumber 输出中会被连续
         # 重复 3 次落字，由 pipeline._clean_text 折叠为单字后解析。
         invoice_type="电子发票（普通发票）",
@@ -226,7 +226,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="贰佰零伍圆肆角肆分",
         drawer="韦鸿捷",
     ),
-    "购_滴滴_01.pdf": dict(
+    "新电子发票-标准/购_滴滴_01.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26507000000214328984",
         issue_date="2026-06-23",
@@ -240,7 +240,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="壹佰贰拾玖圆柒角整",
         drawer="赵笑林",
     ),
-    "购_滴滴_02.pdf": dict(
+    "新电子发票-标准/购_滴滴_02.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26507000000143070934",
         issue_date="2026-04-14",
@@ -254,7 +254,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="肆拾陆元叁角",
         drawer="马苓苓",
     ),
-    "个人代开_01.pdf": dict(
+    "新电子发票-标准/个人代开_01.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26502000001222344391",
         issue_date="2026-06-20",
@@ -268,7 +268,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="陆佰伍拾圆整",
         drawer="颜俊",
     ),
-    "专利_01.pdf": dict(
+    "中央非税收入统一票据/专利_01.pdf": dict(
         invoice_type="中央非税收入统一票据（电子）",
         invoice_number="0012090205",
         issue_date="2026-06-29",
@@ -282,7 +282,7 @@ EXPECTED: Dict[str, dict] = {
         payee="胡瀛",
         reviewer="王舒",
     ),
-    "航_运输_01.pdf": dict(
+    "航空运输电子客票/航_运输_01.pdf": dict(
         invoice_type="电子发票（航空运输电子客票行程单）",
         invoice_number="26118999111039155396",
         issue_date="2026-06-02",
@@ -294,7 +294,7 @@ EXPECTED: Dict[str, dict] = {
         tax_amount="55.32",
         total_amount="720.00",
     ),
-    "航_运输_02.pdf": dict(
+    "航空运输电子客票/航_运输_02.pdf": dict(
         invoice_type="电子发票（航空运输电子客票行程单）",
         invoice_number="26448784110007039749",
         issue_date="2026-08-04",
@@ -306,7 +306,7 @@ EXPECTED: Dict[str, dict] = {
         tax_amount="57.80",
         total_amount="750.00",
     ),
-    "火车票01.pdf": dict(
+    "铁路电子客票/火车票01.pdf": dict(
         invoice_type="电子发票（铁路电子客票）",
         invoice_number="26319166100004714993",
         issue_date="2026-04-18",
@@ -318,7 +318,7 @@ EXPECTED: Dict[str, dict] = {
         tax_amount="0.00",
         total_amount="37.00",
     ),
-    "火车票02.pdf": dict(
+    "铁路电子客票/火车票02.pdf": dict(
         invoice_type="电子发票（铁路电子客票）",
         invoice_number="26319166100005032784",
         issue_date="2026-04-24",
@@ -331,7 +331,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount="37.00",
     ),
     # ── XML e-invoices (全电发票) ──
-    "购_材料_01.xml": dict(
+    "全电发票-XML/购_材料_01.xml": dict(
         invoice_type="电子发票（增值税专用发票）",
         invoice_number="25502000000129241041",
         issue_date="2025-11-27",
@@ -345,7 +345,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="壹拾肆万零壹佰肆拾壹圆零玖分",
         drawer="李春梅",
     ),
-    "购_油品_01.xml": dict(
+    "全电发票-XML/购_油品_01.xml": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26507000000185284098",
         issue_date="2026-06-02",
@@ -359,7 +359,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="叁仟零壹拾壹圆陆角肆分",
         drawer="邹玮",
     ),
-    "购_油品_02.xml": dict(
+    "全电发票-XML/购_油品_02.xml": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26507000000186658007",
         issue_date="2026-06-02",
@@ -373,7 +373,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="玖佰叁拾捌圆贰角壹分",
         drawer="叶南",
     ),
-    "购_零售_01.xml": dict(
+    "全电发票-XML/购_零售_01.xml": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26502000001147644976",
         issue_date="2026-06-13",
@@ -387,7 +387,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="肆仟伍佰陆拾壹圆陆角捌分",
         drawer="龙艳",
     ),
-    "销_产品_01.xml": dict(
+    "全电发票-XML/销_产品_01.xml": dict(
         invoice_type="电子发票（增值税专用发票）",
         invoice_number="25502000000126087334",
         issue_date="2025-11-21",
@@ -400,6 +400,40 @@ EXPECTED: Dict[str, dict] = {
         total_amount="6034961.05",
         total_amount_upper="陆佰零叁万肆仟玖佰陆拾壹圆零伍分",
         drawer="周妍伶",
+    ),
+    # ── OFD 数电票 (GB/T 33190) ──
+    "全电发票-OFD/dzfp_25502000000126087334_重庆市旺成科技股份有限公司_20251204095208.ofd": dict(
+        # Same invoice as 销_产品_01.xml, just rendered in OFD.  OFD's
+        # CustomTag schema lacks total_amount_upper; ``invoice_type`` is
+        # recovered from the template-layer (Tpls/) banner.
+        invoice_type="电子发票（增值税专用发票）",
+        invoice_number="25502000000126087334",
+        issue_date="2025-11-21",
+        buyer_name="新大洲本田摩托（苏州）有限公司",
+        buyer_tax_id="91320585MA1T6M1R5F",
+        seller_name="重庆市旺成科技股份有限公司",
+        seller_tax_id="91500106622015389N",
+        amount_without_tax="5340673.44",
+        tax_amount="694287.61",
+        total_amount="6034961.05",
+        total_amount_upper="",
+        drawer="周妍伶",
+    ),
+    "全电发票-OFD/烤匠电子发票_332.60元_龚健武.ofd": dict(
+        # B2C 烤鱼店 receipt — no CustomTag.xml; relies on the
+        # layout-based fallback path in ofd_invoice._fill_from_layout.
+        invoice_type="电子发票（普通发票）",
+        invoice_number="26507000000257250590",
+        issue_date="2026-09-26",
+        buyer_name="龚健武（个人）",
+        buyer_tax_id="",
+        seller_name="重庆福烤餐饮服务有限公司",
+        seller_tax_id="91500103MADHB6TU2B",
+        amount_without_tax="313.77",
+        tax_amount="18.83",
+        total_amount="332.60",
+        total_amount_upper="叁佰叁拾贰圆陆角",
+        drawer="苟艳",
     ),
 }
 

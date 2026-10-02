@@ -50,7 +50,7 @@ def parse_xml_invoice(xml_input: Union[bytes, str]) -> Optional[InvoiceRecord]:
     except Exception:
         return None
 
-    return _extract_invoice(root)
+    return extract_invoice_from_root(root)
 
 
 def _text(parent, *tags: str) -> str:
@@ -114,8 +114,16 @@ def _format_date(date_str: str) -> str:
     return normalize_issue_date(date_str)
 
 
-def _extract_invoice(root: DET.Element) -> Optional[InvoiceRecord]:
-    """Extract ``InvoiceRecord`` fields from a parsed ``EInvoice`` XML root."""
+def extract_invoice_from_root(root: DET.Element) -> Optional[InvoiceRecord]:
+    """Extract ``InvoiceRecord`` fields from a parsed ``EInvoice`` XML root.
+
+    Public entry point so the OFD parser (which unpacks an OFD zip and
+    reads the embedded ``CustomTag.xml`` as a normal XML doc) can reuse
+    the same field-extraction logic.  Both standalone XML 数电发票 and
+    the XML embedded inside OFD share the same ``EInvoice`` schema per
+    国税总局 数电发票 spec; H43 ("XML schema sync responsibility")
+    applies here as well.
+    """
 
     eid = root.find("EInvoiceData")
     if eid is None:

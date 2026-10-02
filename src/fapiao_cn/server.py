@@ -418,7 +418,7 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail="Provide file, url, file_path, or file_base64",
             )
-        if detect_format(contents, filename) == "xml":
+        if detect_format(contents, filename) in ("xml", "ofd"):
             raise HTTPException(
                 status_code=400,
                 detail="raw_unsupported: pdf_only",

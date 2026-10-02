@@ -154,7 +154,7 @@ class TestExtractAndVerify:
 
         settings.verify_enabled = False
         sample = os.path.join(
-            os.path.dirname(__file__), "..", "samples", "购_材料_01.pdf"
+            os.path.dirname(__file__), "..", "samples", "新电子发票-标准", "购_材料_01.pdf"
         )
         with open(sample, "rb") as f:
             resp = client.post(
@@ -179,7 +179,7 @@ class TestExtractAndVerify:
         )
 
         sample = os.path.join(
-            os.path.dirname(__file__), "..", "samples", "购_材料_01.pdf"
+            os.path.dirname(__file__), "..", "samples", "新电子发票-标准", "购_材料_01.pdf"
         )
         with open(sample, "rb") as f, patch(
             "httpx.AsyncClient.post",
@@ -204,7 +204,7 @@ class TestExtractAndVerify:
         settings.verify_endpoint = "http://mock-proxy/verify"
 
         sample = os.path.join(
-            os.path.dirname(__file__), "..", "samples", "购_材料_01.pdf"
+            os.path.dirname(__file__), "..", "samples", "新电子发票-标准", "购_材料_01.pdf"
         )
         with open(sample, "rb") as f, patch(
             "httpx.AsyncClient.post",

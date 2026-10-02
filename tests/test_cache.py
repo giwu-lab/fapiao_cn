@@ -91,7 +91,8 @@ class TestCacheIntegration:
         reset_cache_for_tests(capacity=16)
         try:
             sample = os.path.join(
-                os.path.dirname(__file__), "..", "samples", "购_材料_01.pdf"
+                os.path.dirname(__file__), "..", "samples",
+                "新电子发票-标准", "购_材料_01.pdf",
             )
             with open(sample, "rb") as f:
                 contents = f.read()

@@ -15,6 +15,8 @@ TEST_DIR = Path(__file__).resolve().parent.parent / "samples"
 
 
 def _load(name: str) -> bytes:
+    """``name`` is a path relative to ``samples/`` (may include a subdir)."""
+
     return (TEST_DIR / name).read_bytes()
 
 
@@ -22,8 +24,16 @@ class TestBatchExtract:
     def test_two_valid_pdfs(self, auth_headers):
         """Two valid invoices should return a list of two results."""
         data = (
-            ("files", ("火车票01.pdf", io.BytesIO(_load("火车票01.pdf")), "application/pdf")),
-            ("files", ("火车票02.pdf", io.BytesIO(_load("火车票02.pdf")), "application/pdf")),
+            ("files", (
+                "火车票01.pdf",
+                io.BytesIO(_load("铁路电子客票/火车票01.pdf")),
+                "application/pdf",
+            )),
+            ("files", (
+                "火车票02.pdf",
+                io.BytesIO(_load("铁路电子客票/火车票02.pdf")),
+                "application/pdf",
+            )),
         )
         resp = client.post("/extract/batch", headers=auth_headers, files=data)
         assert resp.status_code == 200
@@ -39,7 +49,11 @@ class TestBatchExtract:
     def test_one_valid_one_broken(self, auth_headers):
         """A valid PDF and a non-PDF should each yield a result."""
         data = (
-            ("files", ("火车票01.pdf", io.BytesIO(_load("火车票01.pdf")), "application/pdf")),
+            ("files", (
+                "火车票01.pdf",
+                io.BytesIO(_load("铁路电子客票/火车票01.pdf")),
+                "application/pdf",
+            )),
             ("files", ("bad.txt", io.BytesIO(b"not a pdf"), "text/plain")),
         )
         resp = client.post("/extract/batch", headers=auth_headers, files=data)
@@ -59,7 +73,11 @@ class TestBatchExtract:
         monkeypatch.setattr("fapiao_cn.server.parse_pdf", _boom)
 
         data = (
-            ("files", ("火车票01.pdf", io.BytesIO(_load("火车票01.pdf")), "application/pdf")),
+            ("files", (
+                "火车票01.pdf",
+                io.BytesIO(_load("铁路电子客票/火车票01.pdf")),
+                "application/pdf",
+            )),
         )
         with caplog.at_level(logging.ERROR, logger="fapiao_cn.server"):
             resp = client.post("/extract/batch", headers=auth_headers, files=data)
@@ -115,8 +133,8 @@ class TestBatchExtract:
     def test_json_two_valid(self, auth_headers):
         """JSON with two valid base64 files."""
         import base64
-        a = base64.b64encode(_load("火车票01.pdf")).decode()
-        b = base64.b64encode(_load("火车票02.pdf")).decode()
+        a = base64.b64encode(_load("铁路电子客票/火车票01.pdf")).decode()
+        b = base64.b64encode(_load("铁路电子客票/火车票02.pdf")).decode()
         payload = {
             "files": [
                 {"filename": "火车票01.pdf", "base64": a},

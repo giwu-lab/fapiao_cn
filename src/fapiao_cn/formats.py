@@ -17,6 +17,7 @@ from pdfplumber.utils.exceptions import PdfminerException
 
 from fapiao_cn.cache import get_cache
 from fapiao_cn.config import settings
+from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
 from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
 from fapiao_cn.pipeline import run
 from fapiao_cn.schemas import ExtractResponse, InvoiceRecord
@@ -36,13 +37,52 @@ def _truncate(value: object, limit: int = _MAX_ERR_TAIL) -> str:
 
 
 def detect_format(contents: bytes, filename: str) -> str:
-    """Identify document format: ``"xml"`` or ``"pdf"`` (default)."""
+    """Identify document format: ``"xml"``, ``"ofd"`` or ``"pdf"`` (default)."""
 
-    if filename and filename.lower().endswith(".xml"):
+    if filename and filename.lower().endswith("xml"):
         return "xml"
+    if filename and filename.lower().endswith("ofd"):
+        return "ofd"
     if contents[:5] == b"<?xml":
         return "xml"
+    # OFD is a ZIP archive; the standard mandates ``OFD.xml`` at root.
+    # Sniff the magic + central directory cheaply without paying for a
+    # full ZIP parse here; the real validation happens inside
+    # ``parse_ofd_invoice``.
+    if contents[:2] == b"PK":
+        try:
+            if b"OFD.xml" in contents[: 2 * 1024 * 1024]:
+                return "ofd"
+        except Exception:
+            pass
     return "pdf"
+
+
+def _parse_ofd(contents: bytes, filename: str) -> ExtractResponse:
+    record: Optional[InvoiceRecord] = parse_ofd_invoice(contents)
+    if record is None:
+        return ExtractResponse(
+            file=filename,
+            message="error: ofd_parse_failed: malformed or unsupported OFD",
+        )
+    return ExtractResponse(
+        file=filename,
+        page_count=record.page_count,
+        invoice_type=record.invoice_type,
+        invoice_number=record.invoice_number,
+        issue_date=record.issue_date,
+        buyer_name=record.buyer_name,
+        buyer_tax_id=record.buyer_tax_id,
+        seller_name=record.seller_name,
+        seller_tax_id=record.seller_tax_id,
+        amount_without_tax=record.amount_without_tax,
+        tax_amount=record.tax_amount,
+        total_amount=record.total_amount,
+        total_amount_upper=record.total_amount_upper,
+        payee=record.payee,
+        reviewer=record.reviewer,
+        drawer=record.drawer,
+    )
 
 
 def _parse_xml(contents: bytes, filename: str) -> ExtractResponse:
@@ -112,6 +152,8 @@ def parse_pdf(contents: bytes, filename: str = "") -> ExtractResponse:
 
     if detect_format(contents, filename) == "xml":
         resp = _parse_xml(contents, filename)
+    elif detect_format(contents, filename) == "ofd":
+        resp = _parse_ofd(contents, filename)
     else:
         try:
             result = run(contents)

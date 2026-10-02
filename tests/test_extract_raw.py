@@ -20,7 +20,7 @@ def _load(name: str) -> bytes:
 
 class TestExtractRaw:
     def test_raw_multipart_pdf(self, auth_headers):
-        contents = _load("购_材料_01.pdf")
+        contents = _load("新电子发票-标准/购_材料_01.pdf")
         resp = client.post(
             "/raw",
             headers=auth_headers,
@@ -34,7 +34,7 @@ class TestExtractRaw:
         assert isinstance(body["lines"], list)
 
     def test_raw_json_file_path(self, auth_headers):
-        path = os.path.join(_TEST_DIR, "购_材料_01.pdf")
+        path = os.path.join(_TEST_DIR, "新电子发票-标准", "购_材料_01.pdf")
         resp = client.post("/raw", headers=auth_headers, json={"file_path": path})
         assert resp.status_code == 200
         body = resp.json()
@@ -44,7 +44,7 @@ class TestExtractRaw:
     def test_raw_json_base64(self, auth_headers):
         import base64
 
-        b64 = base64.b64encode(_load("购_材料_01.pdf")).decode()
+        b64 = base64.b64encode(_load("新电子发票-标准/购_材料_01.pdf")).decode()
         resp = client.post(
             "/raw",
             headers=auth_headers,
@@ -71,7 +71,7 @@ class TestExtractRaw:
 
     def test_raw_xml_returns_400(self, auth_headers):
         """``/raw`` is PDF-only — XML inputs must be rejected."""
-        xml_bytes = _load("购_材料_01.xml")
+        xml_bytes = _load("全电发票-XML/购_材料_01.xml")
         resp = client.post(
             "/raw",
             headers=auth_headers,
@@ -85,7 +85,7 @@ class TestExtractRaw:
         resp = client.post(
             "/raw",
             headers=auth_headers,
-            json={"file_path": os.path.join(_TEST_DIR, "购_材料_01.xml")},
+            json={"file_path": os.path.join(_TEST_DIR, "全电发票-XML", "购_材料_01.xml")},
         )
         assert resp.status_code == 400
         assert "raw_unsupported" in resp.json()["detail"]
@@ -95,7 +95,13 @@ class TestExtractRaw:
         resp = client.post(
             "/raw",
             headers=auth_headers,
-            files={"file": ("购_材料_01.pdf", _load("购_材料_01.pdf"), "application/pdf")},
+            files={
+                "file": (
+                    "购_材料_01.pdf",
+                    _load("新电子发票-标准/购_材料_01.pdf"),
+                    "application/pdf",
+                )
+            },
         )
         assert resp.status_code == 200
         assert set(resp.json().keys()) == {"text", "lines", "page_count", "message"}
