@@ -13,8 +13,8 @@ import pdfplumber
 from fapiao_cn.parsers import dispatch
 from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
 from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
-from fapiao_cn.pipeline import _aggregate, _clean_text
-from fapiao_cn.schemas import InvoiceRecord
+from fapiao_cn.pipeline import _aggregate, _clean_text, run_customs
+from fapiao_cn.schemas import CustomsDeclarationHeader, InvoiceRecord
 
 TEST_DIR = Path(__file__).resolve().parent.parent / "samples"
 
@@ -47,6 +47,15 @@ def parse_pdf(filename: str) -> InvoiceRecord:
     ]
     recs = [parser_func(t, ctx) for t, ctx in zip(texts, ctx_list)]
     return _aggregate(recs, file_label=filename, page_count=n)
+
+
+def parse_customs_pdf(filename: str) -> CustomsDeclarationHeader:
+    """Parse a 海关出口货物报关单 PDF through the customs pipeline."""
+
+    path = str(TEST_DIR / filename)
+    with open(path, "rb") as f:
+        contents = f.read()
+    return run_customs(contents, file_label=filename)
 
 
 def _looks_like_ofd(contents: bytes) -> bool:

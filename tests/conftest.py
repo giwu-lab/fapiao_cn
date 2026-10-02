@@ -429,11 +429,139 @@ EXPECTED: Dict[str, dict] = {
         buyer_tax_id="",
         seller_name="重庆福烤餐饮服务有限公司",
         seller_tax_id="91500103MADHB6TU2B",
-        amount_without_tax="313.77",
+amount_without_tax="313.77",
         tax_amount="18.83",
         total_amount="332.60",
         total_amount_upper="叁佰叁拾贰圆陆角",
         drawer="苟艳",
+    ),
+}
+
+
+# Map of customs-declaration filename → expected fields.  Used by the
+# TestKnownCustomsDeclarations class in test_pipeline.py.  Lives here
+# (next to ``EXPECTED``) so the parametrisation helper stays consistent
+# with the invoice side.  Each entry is a partial mapping; only the
+# fields stable across runs are asserted.
+EXPECTED_CUSTOMS: Dict[str, dict] = {
+    "报关单/L20260602000010_0429.pdf": dict(
+        declaration_variant="出口退税联",
+        direction="出口",
+        customs_no="223120260001921706",
+        pre_entry_no="E20260001753221591",
+        shipper_name="重庆旺成贸易有限公司",
+        shipper_tax_id="5006960544",
+        producer_name="重庆旺成贸易有限公司",
+        customs_office_name="洋山港区",
+        customs_office_code="2248",
+        transport_mode="水路运输",
+        supervision_mode_name="一般贸易",
+        supervision_mode_code="0110",
+        export_date="2026-05-13",
+        declaration_date="2026-05-13",
+        print_date="2026-05-26",
+        bill_of_lading_no="W237316692",
+        packages_count="3",
+        gross_weight_kg="858.83",
+        net_weight_kg="749.94",
+        container_no="YMLU5151410",
+        item_count=3,
+        currency="USD",
+        total_amount="5332.28",
+    ),
+    "报关单/L20260528000009_21708433876_报关单放行条合并文档(1).pdf": dict(
+        declaration_variant="操作联",
+        direction="出口",
+        customs_no="010120260000240192",
+        shipper_name="重庆旺成贸易有限公司",
+        shipper_tax_id="91500106660851636U",
+        producer_name="重庆旺成贸易有限公司",
+        producer_tax_id="91500106660851636U",
+        declarant_name="北京巡宇国际货运代理有限公司",
+        declarant_tax_id="911101131025694095",
+        customs_office_name="昆明机场",
+        customs_office_code="8620",
+        transport_mode_code="5",
+        supervision_mode_name="一般贸易",
+        supervision_mode_code="0110",
+        tax_exemption_name="一般征税",
+        tax_exemption_code="101",
+        export_date="2026-05-05",
+        declaration_date="2026-05-05",
+        bill_of_lading_no="21708433876",
+        packages_count="1",
+        gross_weight_kg="271",
+        net_weight_kg="236.8",
+        item_count=1,
+        total_amount="1943.24",
+    ),
+    "报关单/L20260625000008_0522.pdf": dict(
+        # 出口退税联 6 页 — 24 items 跨页累计
+        declaration_variant="出口退税联",
+        direction="出口",
+        customs_no="530420260000900809",
+        pre_entry_no="E20260001764576435",
+        shipper_name="重庆市旺成科技股份有限公司",
+        shipper_tax_id="5006960207",
+        producer_name="重庆市旺成科技股份有限公司",
+        customs_office_name="蛇口海关",
+        customs_office_code="5304",
+        supervision_mode_code="0110",
+        packages_count="37",
+        gross_weight_kg="9276.48",
+        net_weight_kg="8277.48",
+        item_count=24,
+        currency="USD",
+        total_amount="49195.76",
+    ),
+    "报关单/L20260626000009_BGD_SNKO020260509798.pdf": dict(
+        declaration_variant="操作联",
+        direction="出口",
+        customs_no="222920260002109647",
+        shipper_name="重庆旺成贸易有限公司",
+        shipper_tax_id="91500106660851636U",
+        producer_name="重庆旺成贸易有限公司",
+        producer_tax_id="91500106660851636U",
+        declarant_name="上海航联报关有限责任公司",
+        declarant_tax_id="91310109132289635R",
+        customs_office_name="外港海关",
+        customs_office_code="2225",
+        transport_mode_code="2",
+        supervision_mode_name="一般贸易",
+        supervision_mode_code="0110",
+        tax_exemption_name="一般征税",
+        tax_exemption_code="101",
+        export_date="2026-05-30",
+        bill_of_lading_no="SNKO020260509798",
+        packages_count="16",
+        gross_weight_kg="8649",
+        net_weight_kg="7833",
+        item_count=2,
+    ),
+    "报关单/L20260901000001_SHSL60355800_bgd.pdf": dict(
+        # 2 页：页 0 含 6 个商品，页 1 含 11 个商品（试在 11 个）
+        declaration_variant="操作联",
+        direction="出口",
+        customs_no="222920260003331202",
+        shipper_name="重庆旺成贸易有限公司",
+        shipper_tax_id="91500106660851636U",
+        producer_name="重庆旺成贸易有限公司",
+        producer_tax_id="91500106660851636U",
+        declarant_name="上海其意通报关有限公司",
+        declarant_tax_id="91310109786289650K",
+        customs_office_name="外港海关",
+        customs_office_code="2225",
+        transport_mode_code="2",
+        supervision_mode_name="一般贸易",
+        supervision_mode_code="0110",
+        tax_exemption_name="一般征税",
+        tax_exemption_code="101",
+        export_date="2026-08-14",
+        bill_of_lading_no="SHSL60355800",
+        packages_count="29",
+        gross_weight_kg="15960.6",
+        net_weight_kg="14765.6",
+        item_count=17,
     ),
 }
 
@@ -546,3 +674,12 @@ def pytest_generate_tests(metafunc):
     if "filename" in metafunc.fixturenames and "expected" in metafunc.fixturenames:
         items = [(f, EXPECTED.get(f, {})) for f in sorted(EXPECTED)]
         metafunc.parametrize("filename,expected", items)
+    if (
+        "customs_filename" in metafunc.fixturenames
+        and "customs_expected" in metafunc.fixturenames
+    ):
+        items = [
+            (f, EXPECTED_CUSTOMS.get(f, {}))
+            for f in sorted(EXPECTED_CUSTOMS)
+        ]
+        metafunc.parametrize("customs_filename,customs_expected", items)

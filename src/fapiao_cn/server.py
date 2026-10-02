@@ -37,7 +37,8 @@ from fapiao_cn.formats import detect_format, parse_pdf
 from fapiao_cn.input import resolve_batch_input, resolve_input
 from fapiao_cn.parsers import get_format_descriptions
 from fapiao_cn.pipeline import run as run_pipeline
-from fapiao_cn.schemas import ExtractResponse, PdfRaw
+from fapiao_cn.pipeline import run_customs
+from fapiao_cn.schemas import CustomsDeclarationHeader, ExtractResponse, PdfRaw
 from fapiao_cn.utils import truncate as _truncate_msg
 from fapiao_cn.verify import VerifyRequest, verify_invoice
 
@@ -46,6 +47,86 @@ log = logging.getLogger("fapiao_cn.server")
 # /formats descriptions are sourced from the parser registry (H7)
 # so adding a new parser automatically surfaces here.
 _FORMATS = get_format_descriptions()
+
+
+# Field dictionary for the customs-declaration schema, returned by
+# ``GET /formats/customs``.  Each entry pairs the wire name with the
+# Chinese label, the Python type and a short description so a UI can
+# render the form without hard-coding.
+_CUSTOMS_FIELD_SCHEMA = (
+    ("file", "string", "上传文件名"),
+    ("page_count", "int", "页数"),
+    ("declaration_variant", "string", "联次（操作联 / 出口退税联）"),
+    ("direction", "string", "进出口（出口 / 进口）"),
+    ("customs_no", "string", "海关编号"),
+    ("pre_entry_no", "string", "预录入编号"),
+    ("record_no", "string", "备案号"),
+    ("export_date", "date", "出口日期 (YYYY-MM-DD)"),
+    ("declaration_date", "date", "申报日期 (YYYY-MM-DD)"),
+    ("print_date", "date", "打印日期 (YYYY-MM-DD)，退税联独有"),
+    ("shipper_name", "string", "境内发货人 / 境内收发货人 (卖家)"),
+    ("shipper_tax_id", "string", "境内发货人统一社会信用代码"),
+    ("consignee_name", "string", "境外收货人 (买家；退税联无此字段)"),
+    ("consignee_tax_id", "string", "境外收货人统一社会信用代码"),
+    ("producer_name", "string", "生产销售单位"),
+    ("producer_tax_id", "string", "生产销售单位统一社会信用代码"),
+    ("declarant_name", "string", "申报单位 (报关代理)"),
+    ("declarant_tax_id", "string", "申报单位统一社会信用代码"),
+    ("customs_office_code", "string", "关区代码 (出境关别 / 出口口岸)"),
+    ("customs_office_name", "string", "关区名称"),
+    ("transport_mode", "string", "运输方式"),
+    ("transport_mode_code", "string", "运输方式代码"),
+    ("vessel_or_flight", "string", "运输工具名称及航次号"),
+    ("bill_of_lading_no", "string", "提运单号"),
+    ("supervision_mode_code", "string", "监管方式代码 (0110=一般贸易)"),
+    ("supervision_mode_name", "string", "监管方式名称"),
+    ("tax_exemption_code", "string", "征免性质代码 (101=一般征税)"),
+    ("tax_exemption_name", "string", "征免性质名称"),
+    ("settlement_method", "string", "结汇方式 (退税联独有)"),
+    ("license_no", "string", "许可证号"),
+    ("approval_no", "string", "批准文号 (退税联独有)"),
+    ("contract_no", "string", "合同协议号"),
+    ("trade_country_code", "string", "贸易国（地区）代码"),
+    ("trade_country_name", "string", "贸易国（地区）名称"),
+    ("destination_country_code", "string", "运抵国（地区）代码"),
+    ("destination_country_name", "string", "运抵国（地区）名称"),
+    ("destination_port_code", "string", "指运港代码"),
+    ("destination_port_name", "string", "指运港名称"),
+    ("exit_port_code", "string", "离境口岸代码 (出口联独有)"),
+    ("exit_port_name", "string", "离境口岸名称"),
+    ("source_region_code", "string", "境内货源地代码"),
+    ("source_region_name", "string", "境内货源地名称"),
+    ("package_type_code", "string", "包装种类代码"),
+    ("package_type_name", "string", "包装种类名称"),
+    ("packages_count", "string", "件数"),
+    ("gross_weight_kg", "string", "毛重（千克）"),
+    ("net_weight_kg", "string", "净重（千克）"),
+    ("trade_term_code", "string", "成交方式代码"),
+    ("trade_term_name", "string", "成交方式名 (FOB / C&F / CIF)"),
+    ("freight", "string", "运费"),
+    ("insurance", "string", "保费"),
+    ("misc_charges", "string", "杂费"),
+    ("attached_docs", "string", "随附单证及编号 / 随附单据"),
+    ("container_no", "string", "集装箱号 (退税联独有)"),
+    ("container_summary", "string", "集装箱标箱数及号码 (操作联独有)"),
+    ("marks_and_remarks", "string", "标记唛码及备注"),
+    ("declarant_person", "string", "报关人员"),
+    ("declarant_person_id", "string", "报关人员证号"),
+    ("declarant_phone", "string", "电话"),
+    ("item_count", "int", "商品项数 (跨页累计)"),
+    ("currency", "string", "主导币制 (如 USD)"),
+    ("total_amount", "string", "总价累加 (原值)"),
+    ("items", "CustomsDeclarationItem[]", "商品明细数组"),
+)
+
+
+def _customs_field_schema() -> list:
+    """Serialize the schema entries as a list of dicts for ``/formats/customs``."""
+
+    return [
+        {"name": name, "type": typ, "description": desc}
+        for name, typ, desc in _CUSTOMS_FIELD_SCHEMA
+    ]
 
 
 # ── Batch thread pool (re-created lazily if worker count changes) ──
@@ -329,6 +410,52 @@ def create_app() -> FastAPI:
     def list_formats():
         """Return the list of supported invoice types."""
         return {"formats": _FORMATS}
+
+    @app.get(
+        "/formats/customs",
+        dependencies=[Depends(auth_required("extract"))],
+    )
+    def list_customs_format():
+        """Return the field dictionary for the customs-declaration schema.
+
+        Surfaces every field of ``CustomsDeclarationHeader`` plus its
+        Chinese label so downstream consumers can build a UI without
+        hard-coding field names.
+        """
+        return {"fields": _customs_field_schema()}
+
+    @app.post(
+        "/extract/customs",
+        response_model=CustomsDeclarationHeader,
+        dependencies=[Depends(auth_required("extract"))],
+    )
+    async def extract_customs(request: Request):
+        """Extract fields from a 海关出口货物报关单 PDF.
+
+        Accepts the same input shapes as ``/extract`` (multipart upload,
+        ``url`` / ``file_path`` / ``file_base64`` JSON).  Multi-page
+        出口退税联 declarations accumulate all line items across pages
+        into ``items[]``; merged documents (报关单 + 放行条) parse the
+        报关单 page(s) and silently ignore the 放行条 page.
+        """
+        contents, filename = await resolve_input(request)
+        if contents is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide file, url, file_path, or file_base64",
+            )
+        try:
+            rec = run_customs(contents, file_label=filename)
+        except Exception as exc:
+            log.exception("run_customs failed for %s", filename)
+            return JSONResponse(
+                status_code=500,
+                content=CustomsDeclarationHeader(
+                    file=filename,
+                    message=f"error: internal_error: {_truncate_msg(exc)}",
+                ).model_dump(exclude_none=True),
+            )
+        return rec
 
     @app.post(
         "/extract",

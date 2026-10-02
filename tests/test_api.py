@@ -96,6 +96,110 @@ class TestFormats:
         assert "formats" in data
         assert "new" in data["formats"]
         assert "airline" in data["formats"]
+        assert "customs_declaration" in data["formats"]
+
+
+class TestCustomsFormats:
+    def test_customs_format_returns_field_schema(self, auth_headers):
+        resp = client.get("/formats/customs", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "fields" in data
+        names = {f["name"] for f in data["fields"]}
+        # Required fields surfaced from the schema.
+        for required in (
+            "customs_no",
+            "pre_entry_no",
+            "export_date",
+            "shipper_name",
+            "shipper_tax_id",
+            "consignee_name",
+            "producer_name",
+            "declarant_name",
+            "customs_office_name",
+            "customs_office_code",
+            "transport_mode",
+            "supervision_mode_name",
+            "supervision_mode_code",
+            "bill_of_lading_no",
+            "destination_country_name",
+            "items",
+            "total_amount",
+            "currency",
+        ):
+            assert required in names, f"missing field {required}"
+
+
+class TestExtractCustoms:
+    """End-to-end tests for ``/extract/customs``."""
+
+    def _path(self, name: str) -> str:
+        return os.path.join(_TEST_DIR, "报关单", name)
+
+    def test_extract_customs_refund(self, auth_headers):
+        path = self._path("L20260602000010_0429.pdf")
+        resp = client.post("/extract/customs", json={"file_path": path}, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["declaration_variant"] == "出口退税联"
+        assert data["customs_no"] == "223120260001921706"
+        assert data["shipper_name"] == "重庆旺成贸易有限公司"
+        assert data["shipper_tax_id"] == "5006960544"
+        assert data["item_count"] == 3
+        assert data["currency"] == "USD"
+        assert data["total_amount"] == "5332.28"
+
+    def test_extract_customs_operational(self, auth_headers):
+        path = self._path("L20260626000009_BGD_SNKO020260509798.pdf")
+        resp = client.post("/extract/customs", json={"file_path": path}, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["declaration_variant"] == "操作联"
+        assert data["customs_no"] == "222920260002109647"
+        assert data["declarant_name"] == "上海航联报关有限责任公司"
+
+    def test_extract_customs_multi_page_refund(self, auth_headers):
+        """6-page 退税联 declaration: items must aggregate across pages."""
+        path = self._path("L20260625000008_0522.pdf")
+        resp = client.post("/extract/customs", json={"file_path": path}, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["page_count"] == 6
+        assert data["item_count"] == 24
+        assert data["total_amount"] == "49195.76"
+
+    def test_extract_customs_merged_document_skips_release(self, auth_headers):
+        """The 报关单 + 放行条 merged PDF must yield 报关单 fields only."""
+        path = self._path("L20260528000009_21708433876_报关单放行条合并文档(1).pdf")
+        resp = client.post("/extract/customs", json={"file_path": path}, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["declaration_variant"] == "操作联"
+        assert data["customs_no"] == "010120260000240192"
+        assert data["declarant_name"] == "北京巡宇国际货运代理有限公司"
+        # The 放行条 page must not produce a customs_no.
+        assert data["customs_no"]
+
+    def test_extract_customs_upload_form(self, auth_headers):
+        path = self._path("L20260602000010_0429.pdf")
+        with open(path, "rb") as f:
+            resp = client.post(
+                "/extract/customs",
+                headers=auth_headers,
+                files={"file": ("0429.pdf", f, "application/pdf")},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["customs_no"] == "223120260001921706"
+
+    def test_extract_customs_unauthenticated(self):
+        """Without an auth header, the endpoint must reject."""
+        path = self._path("L20260602000010_0429.pdf")
+        resp = client.post("/extract/customs", json={"file_path": path})
+        assert resp.status_code in (401, 403)
+
+    def test_extract_customs_no_input(self, auth_headers):
+        resp = client.post("/extract/customs", json={}, headers=auth_headers)
+        assert resp.status_code == 400
 
 
 class TestExtract:

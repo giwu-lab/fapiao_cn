@@ -38,6 +38,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 - **H7**: `/formats` descriptions now sourced from the parser registry via `parsers.get_format_descriptions()` so adding a new parser surfaces documentation automatically. (#7)
 - **H9/H34**: Documented that `_KNOWN_TAX_IDS` is process-local; multi-worker / multi-pod deployments don't share the cache. Marked as best-effort, not a contract (GDPR / PIPL advisory). (#9, #34)
 - **H12**: `KeyRecord.verify_rpm` field + per-scope rate limiting so `/verify` has its own quota independent of `/extract`. New env: `FC_API_KEY_DEFAULT_VERIFY_RPM` (default 30). (#12)
+- **Customs declaration**: 海关出口货物报关单专用解析器（操作联 / 出口退税联）。新增 `CustomsDeclarationHeader` / `CustomsDeclarationItem` schema；端点 `POST /extract/customs` 与 `GET /formats/customs`；多页续打（如 6 页退税联 24 个商品）通过 `ctx["full_text"]` 跨页聚合；合并文档（报关单 + 放行条）副页守卫自动忽略 放行条页。Covered by `tests/test_parsers.py::TestCustomsDeclaration`、`tests/test_pipeline.py::TestKnownCustomsDeclarations` 与 `tests/test_api.py::TestExtractCustoms` 共 33 个用例。
 - **H15/H40**: Expanded company-name keyword set (集团/银行/医院/学校/事务所/工作室/酒店/餐厅/商店) plus a negative list (部/办公室/办事处/中心) so department labels aren't mistaken for company names. (#15, #40)
 - **H21**: New e-invoice parser now recognises `名称含义` / `名称查重` / `销售方名称` as parts of a name rather than as separators. (#21)
 - **H25**: `_INVOICE_NO_EMBEDDED_RE` anchored with `(?=\s|$)` so it doesn't grab digits from a later line. (#25)

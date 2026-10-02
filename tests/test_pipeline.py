@@ -31,6 +31,61 @@ class TestKnownInvoices:
         assert "售" not in record.buyer_name
 
 
+class TestKnownCustomsDeclarations:
+    """Parametrized over every 海关出口货物报关单 PDF in ``samples/报关单/``
+    with stable expected fields."""
+
+    def test_expected_fields_match(
+        self, customs_filename: str, customs_expected: dict
+    ):
+        from tests._helpers import parse_customs_pdf
+
+        rec = parse_customs_pdf(customs_filename)
+        for field, expected_val in customs_expected.items():
+            actual = getattr(rec, field)
+            assert actual == expected_val, (
+                f"[{customs_filename}] {field}: expected {expected_val!r}, got {actual!r}"
+            )
+
+    def test_customs_no_is_18_digits(
+        self, customs_filename: str, customs_expected: dict
+    ):
+        from tests._helpers import parse_customs_pdf
+
+        if not customs_expected.get("customs_no"):
+            pytest.skip("No customs_no expected")
+        rec = parse_customs_pdf(customs_filename)
+        assert rec.customs_no.isdigit()
+        assert len(rec.customs_no) == 18
+
+    def test_items_have_hs_code(
+        self, customs_filename: str, customs_expected: dict
+    ):
+        from tests._helpers import parse_customs_pdf
+
+        if not customs_expected.get("item_count"):
+            pytest.skip("No items expected")
+        rec = parse_customs_pdf(customs_filename)
+        for it in rec.items:
+            assert it.hs_code and len(it.hs_code) == 10, (
+                f"[{customs_filename}] bad hs_code: {it.hs_code!r}"
+            )
+
+    def test_release_notice_does_not_pollute(
+        self, customs_filename: str, customs_expected: dict
+    ):
+        """Merged-document 报关单 + 放行条 pages parse the 报关单 page
+        only — the 放行条 page must not contribute declarations to the
+        output."""
+        from tests._helpers import parse_customs_pdf
+
+        rec = parse_customs_pdf(customs_filename)
+        # ``customs_no`` must always be present (not '').
+        assert rec.customs_no, f"{customs_filename}: empty customs_no"
+        # The 报关单 title is on the parsed page only.
+        assert rec.declaration_variant in ("操作联", "出口退税联")
+
+
 class TestEdgeCases:
     def test_empty_text(self):
         from fapiao_cn.parsers.invoice import parse_new_electronic_invoice

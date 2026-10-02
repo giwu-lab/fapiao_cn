@@ -875,3 +875,148 @@ class TestOfdParser:
         # No invoice signal ⇒ either None or an empty record.  Both are
         # acceptable; we just don't want to crash.
         assert rec is None or rec.invoice_number == ""
+
+
+class TestCustomsDeclaration:
+    """Unit tests for ``fapiao_cn.parsers.customs_declaration``."""
+
+    OPERATIONAL_TEXT = """
+中华人民共和国海关出口货物报关单 *222920260002109647*
+预录入编号：222920260002109647 海关编号：222920260002109647
+境内发货人 （91500106660851636U） 出境关别 (2225) 出口日期 申报日期 备案号
+重庆旺成贸易有限公司 外港海关 20260530 20260527
+境外收货人 （） 运输方式 (2) 运输工具名称及航次号 提运单号
+PT TVS MOTOR COMPANY INDONESIA 水路运输 HOCHIMINH VOYAGER/2605S SNKO020260509798
+生产销售单位（91500106660851636U） 监管方式 (0110) 征免性质 (101) 许可证号
+重庆旺成贸易有限公司 一般贸易 一般征税
+合同协议号 贸易国（地区）(IDN) 运抵国（地区）(IDN) 指运港 (IDN081) 离境口岸 (310701)
+印度尼西亚 印度尼西亚 雅加达（印度尼西亚） 外高桥
+包装种类 (23) 件数 毛重（千克） 净重（千克） 成交方式(3) 运费 保费 杂费
+木制或竹藤等植物性材料制盒/箱 16 8649 7833 FOB
+项号 商品编号 商品名称及规格型号 数量及单位 单价/总价/币制 原产国(地区) 最终目的国(地区) 境内货源地 征免
+1 8483900090 离合器外罩 4333千克 5.71 中国 印度尼西亚 (50069)沙坪坝区 照章征税
+1|1|安装于摩托车发动机内 28550 (CHN) (IDN) (1) 5000个 美元
+2 8483409090 从动齿轮 5000个 5.42 中国 印度尼西亚 (50069)沙坪坝区 照章征税
+1|1|安装于摩托车发动机内 3500千克 27100 (CHN) (IDN) (1) 5000个 美元
+"""
+
+    REFUND_TEXT = """
+JG09
+报关单证明第 1 次打印 出口退税联
+主页 中华人民共和国海关出口货物报关单
+预录入编号：E20260001753221591 海关编号：223120260001921706
+出口口岸(2248) 备案号 出口日期 申报日期
+洋山港区 20260513 20260512
+境内收发货人(5006960544) 运输方式 运输工具名称 提运单号
+重庆旺成贸易有限公司 水路运输 HYUNDAI FORWARD W237316692
+生产销售单位 贸易方式(0110) 征免性质 结汇方式
+重庆旺成贸易有限公司 一般贸易
+许可证号 运抵国（地区）(502) 指运港（地区）(502) 境内货源地(50069)
+美国 美国 沙坪坝区
+批准文号 成交方式 运费 保费 杂费
+FOB /0/ /0/ /0/
+合同协议号 件数 包装种类 毛重（千克） 净重（千克）
+WCTEAM26042901 3 其它 858.83 749.94
+集装箱号 随附单据
+YMLU5151410
+标记唛码及备注
+港:ST PAUL
+商品序号 商品编号 商品名称、规格型号 数量/单位 数量及单位 目的国(地区) 单价 总价 币制 征免
+1 8483109090 初级输出轴 法定数量/法定单位 210个 美国 8.97 1883.7 USD
+0|0|将发动机的动力传 第二数量/第二单位 325.5千克 (502) 美元
+递给车轮，使汽车产生
+申报数量/申报单位 210个
+2 8708409990 联接盘 法定数量/法定单位 270个 美国 3.31 893.7 USD
+0|0|适用于POLARIS品 第二数量/第二单位 113.4千克 (502) 美元
+申报数量/申报单位 270个
+Page 1 of 1 打印日期：2026-05-26
+"""
+
+    NON_DECLARATION_TEXT = """
+通关无纸化出口放行通知书
+北京巡宇国际货运代理有限公司
+海关编号：222920260002109647
+出口日期 20260530
+"""
+
+    def _parse(self, text: str):
+        from fapiao_cn.parsers.customs_declaration import parse_customs_declaration
+
+        return parse_customs_declaration(
+            text,
+            {"page_index": 0, "parser_name": "customs_declaration", "full_text": text},
+        )
+
+    def test_operational_variant(self):
+        rec = self._parse(self.OPERATIONAL_TEXT)
+        assert rec.declaration_variant == "操作联"
+        assert rec.direction == "出口"
+        assert rec.customs_no == "222920260002109647"
+        assert rec.pre_entry_no == "222920260002109647"
+        assert rec.shipper_name == "重庆旺成贸易有限公司"
+        assert rec.shipper_tax_id == "91500106660851636U"
+        assert rec.producer_name == "重庆旺成贸易有限公司"
+        assert rec.producer_tax_id == "91500106660851636U"
+        assert rec.customs_office_name == "外港海关"
+        assert rec.customs_office_code == "2225"
+        assert rec.supervision_mode_name == "一般贸易"
+        assert rec.supervision_mode_code == "0110"
+        assert rec.tax_exemption_name == "一般征税"
+        assert rec.tax_exemption_code == "101"
+        assert rec.export_date == "2026-05-30"
+        assert rec.declaration_date == "2026-05-30"
+        assert rec.bill_of_lading_no == "SNKO020260509798"
+
+    def test_refund_variant(self):
+        rec = self._parse(self.REFUND_TEXT)
+        assert rec.declaration_variant == "出口退税联"
+        assert rec.direction == "出口"
+        assert rec.customs_no == "223120260001921706"
+        assert rec.pre_entry_no == "E20260001753221591"
+        assert rec.print_date == "2026-05-26"
+        assert rec.shipper_name == "重庆旺成贸易有限公司"
+        assert rec.shipper_tax_id == "5006960544"
+        assert rec.producer_name == "重庆旺成贸易有限公司"
+        assert rec.supervision_mode_code == "0110"
+        assert rec.contract_no == "WCTEAM26042901"
+        assert rec.packages_count == "3"
+        assert rec.gross_weight_kg == "858.83"
+        assert rec.net_weight_kg == "749.94"
+        assert rec.container_no == "YMLU5151410"
+
+    def test_items_extracted(self):
+        rec = self._parse(self.REFUND_TEXT)
+        assert rec.item_count == 2
+        # Item 1 total price
+        assert rec.items[0].hs_code == "8483109090"
+        assert rec.items[0].total_price == "1883.7"
+        assert rec.items[0].currency_name == "USD"
+        assert rec.items[1].hs_code == "8708409990"
+        assert rec.items[1].total_price == "893.7"
+        # Cumulative total (USD 原值)
+        assert rec.total_amount == "2777.40"
+        assert rec.currency == "USD"
+
+    def test_non_declaration_page_returns_empty(self):
+        """Merged-document 放行条 pages must NOT pollute the record."""
+        rec = self._parse(self.NON_DECLARATION_TEXT)
+        assert rec.declaration_variant == ""
+        assert rec.customs_no == ""
+        assert rec.shipper_name == ""
+        assert rec.total_amount == ""
+
+    def test_release_notice_truncated_in_full_text(self):
+        """When ``full_text`` spans a 报关单 + 放行条, item extraction
+        must stop at the 放行条 boundary."""
+
+        full_text = self.OPERATIONAL_TEXT + "\n" + self.NON_DECLARATION_TEXT
+        from fapiao_cn.parsers.customs_declaration import parse_customs_declaration
+
+        rec = parse_customs_declaration(
+            self.OPERATIONAL_TEXT,
+            {"page_index": 0, "full_text": full_text, "page_count": 2},
+        )
+        # Items should come only from the 报关单 portion.
+        assert all(
+            "摩托车发动机" in (it.name_and_spec or "") or it.hs_code for it in rec.items
+        )

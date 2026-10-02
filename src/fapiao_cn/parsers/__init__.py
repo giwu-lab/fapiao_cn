@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Callable, Dict, List, Tuple
 
 from fapiao_cn.parsers.airline_ticket import parse_airline_ticket
+from fapiao_cn.parsers.customs_declaration import parse_customs_declaration
 from fapiao_cn.parsers.invoice import parse_new_electronic_invoice
 from fapiao_cn.parsers.merged_code import parse_merged_code_invoice
 from fapiao_cn.parsers.non_tax_receipt import parse_central_non_tax_receipt
@@ -62,6 +63,12 @@ _register(
     ("中央非税收入统一票据", "交款人统一社会信用代码"),
     parse_central_non_tax_receipt,
     description="中央非税收入统一票据（电子）（如专利年费、行政事业性收费）",
+)
+_register(
+    "customs_declaration",
+    ("中华人民共和国海关出口货物报关单", "海关编号"),
+    parse_customs_declaration,
+    description="中华人民共和国海关出口货物报关单（操作联 / 出口退税联）",
 )
 _register(
     "old",
