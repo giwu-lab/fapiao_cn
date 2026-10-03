@@ -49,6 +49,33 @@ ruff check src tests
 mypy src/fapiao_cn
 ```
 
+### Windows
+
+CI 只在 ubuntu 上跑，`fapiao_cn` CLI 的生命周期子命令在 Windows 上有两个已知问题，
+因此单独提供了 `scripts/start-win.ps1`：
+
+1. `cli.py::_alive()` 用 `os.kill(pid, 0)` 探活，Windows 没有信号 0，该调用抛
+   `OSError: [Errno 22]`，于是 `_alive()` 恒为 `False`——`fapiao_cn status` 会把运行中的
+   服务报成「stale pid file」，`fapiao_cn stop` 则只删 PID 文件、返回 0，**却不杀进程**。
+2. venv 的 `Scripts\python.exe` 会再 fork 出真正持有 socket 的子进程，直接拿
+   `Start-Process -PassThru` 的 PID 写 PID 文件会导致 stop 打错进程。
+
+```powershell
+# 启动（默认读 .env 的 FC_HOST / FC_PORT）
+powershell -ExecutionPolicy Bypass -File .\scripts\start-win.ps1
+
+# 查看状态 / 停止
+powershell -ExecutionPolicy Bypass -File .\scripts\start-win.ps1 -Status
+powershell -ExecutionPolicy Bypass -File .\scripts\start-win.ps1 -Stop
+
+# 解释器不在仓库 .venv 里时（Windows 的 .venv\Scripts\python.exe），显式指定
+powershell -ExecutionPolicy Bypass -File .\scripts\start-win.ps1 `
+  -Python D:\path\to\.venv\Scripts\python.exe
+```
+
+脚本会等 `/health` 真正返回 200 才算启动成功，从 TCP 监听表反查**真实**监听 PID 写入
+`logs/fapiao_cn.pid`，并在端口被非本项目进程占用时拒绝启动 / 拒绝终止。
+
 dev 模式默认需要 API Key（除 `/health`）。手动写入 `.env`：
 
 ```bash
@@ -119,9 +146,43 @@ curl -H "Content-Type: application/json" \
   "total_amount": "140141.09",
   "total_amount_upper": "壹拾肆万零壹佰肆拾壹圆零玖分",
   "payee": "", "reviewer": "", "drawer": "李春梅",
+  "items": [],
   "message": "success"
 }
 ```
+
+### `items[]` 商品明细
+
+`/extract` 的响应里带一个 `items` 数组。**目前仅 XML 全电发票填充；PDF 与 OFD 恒为 `[]`**
+（OFD 的明细可解析但暂未启用——其 `CustomTag.xml` 同一文件内混用「`GoodsInfos` 包装」
+与「`root` 直挂」两套布局，漏掉后者会静默少数据）。
+
+| 字段 | 来源元素 | 说明 |
+| --- | --- | --- |
+| `item_no` | 解析器生成 | 1..N 按出现顺序（XML 不带行号） |
+| `name` | `ItemName` | 已剥离 `*类别*` 前缀 |
+| `category` | 从 `ItemName` 拆分 | 如 `齿轮` |
+| `spec` | `SpecMod` | 规格型号 |
+| `unit` | `MeaUnits` | 计量单位 |
+| `quantity` | `Quantity` | 可能是 `4333千克` 这类带单位的串 |
+| `unit_price` | `UnPrice` | 单价 |
+| `amount` | `Amount` | 不含税金额（红字行为负数） |
+| `tax_rate` | `TaxRate` | 如 `0.13` |
+| `tax_amount` | `ComTaxAm` | 税额 |
+| `total_amount` | `TotaltaxIncludedAmount` | 价税合计 |
+| `tax_classification_code` | `TaxClassificationCode` | 19 位税收分类编码，退税申报必填 |
+| `is_reversal` | 解析器推导 | 红字冲销行标记，报税时要单独统计 |
+
+**全部金额保持字符串原值**，不做 float 转换：红字行带负号，且税率写法在不同票种间
+不统一。
+
+⚠️ **红字冲销行**（`is_reversal: true`）只有金额三项和税收分类编码，
+`spec` / `unit` / `quantity` / `unit_price` 会是空串——这是票面本身就没有，
+不是解析失败。
+
+服务端会对「明细金额和 / 税额和 / 价税合计和」与表头做**自洽校验**，不一致时写
+warning 日志。这是发现「明细被静默截断」的唯一手段：少掉的行不会报错，
+每一行返回出来都看起来完全正常。
 
 ### `message` 字段语义
 
@@ -163,6 +224,8 @@ HTTP 422 响应体就是 `ExtractResponse` / `PdfRaw`，错误字符串完整保
 | `FC_API_KEY_DEFAULT_RPM` | `60` | 默认每分钟请求上限 |
 | `FC_API_KEY_DEFAULT_BURST` | `10` | 默认令牌桶容量 |
 | `FC_API_LEGACY_ALLOW` | `false` | 双轨兼容：未带 token 也放行（仅迁移期） |
+| `FC_ALLOWED_FILE_PATHS` | （空） | `file_path` 输入白名单目录（CSV）；留空则禁用该入参 |
+| `FC_APP_ROOT` | （空） | 应用根目录，仅 `/health/full` 用。留空时按源码布局推导；镜像内置为 `/app` |
 
 ## API 鉴权
 

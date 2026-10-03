@@ -602,6 +602,112 @@ class TestParserRegistry:
 class TestXmlParser:
     """Unit tests for ``fapiao_cn.parsers.xml_invoice``."""
 
+    def test_xml_items_extracted(self):
+        """Every ``<IssuItemInformation>`` becomes one ``items[]`` entry."""
+        from decimal import Decimal
+
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        with open("samples/全电发票-XML/购_材料_01.xml", "rb") as f:
+            rec = parse_xml_invoice(f.read())
+        assert rec is not None
+        assert len(rec.items) == 4
+        # item_no is generated (XML carries no row number) and must be 1..N.
+        assert [i.item_no for i in rec.items] == [1, 2, 3, 4]
+
+        first = rec.items[0]
+        assert first.name == "从动齿轮（精车坯）"
+        assert first.category == "齿轮"  # split from the ``*齿轮*`` prefix
+        assert first.spec == "23111-2SB-0033-00"
+        assert first.unit == "件"
+        assert first.quantity == "3335"
+        assert first.unit_price == "19.447"
+        assert first.amount == "64855.75"
+        assert first.tax_rate == "0.13"
+        assert first.tax_amount == "8431.25"
+        assert first.total_amount == "73287.00"
+        assert first.tax_classification_code == "1090124020000000000"
+        assert first.is_reversal is False
+
+        # The line items must reconcile with the header totals.
+        assert sum(Decimal(i.amount or 0) for i in rec.items) == Decimal(
+            rec.amount_without_tax
+        )
+        assert sum(Decimal(i.tax_amount or 0) for i in rec.items) == Decimal(
+            rec.tax_amount
+        )
+        assert sum(Decimal(i.total_amount or 0) for i in rec.items) == Decimal(
+            rec.total_amount
+        )
+
+    def test_xml_items_red_reversal_row(self):
+        """红字冲销行 keeps its negative amounts and is flagged."""
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        with open("samples/全电发票-XML/购_材料_01.xml", "rb") as f:
+            rec = parse_xml_invoice(f.read())
+        reversal = [i for i in rec.items if i.is_reversal]
+        assert len(reversal) == 1
+        rev = reversal[0]
+        assert rev.amount == "-2026.01"
+        assert rev.tax_amount == "-263.38"
+        assert rev.total_amount == "-2289.39"
+        # The quantity/price quartet is absent on reversal rows and must not
+        # drop the row.
+        assert rev.quantity == "" and rev.unit_price == ""
+        assert rev.tax_classification_code == "1090124020000000000"
+
+    def test_xml_items_multi_page_invoice(self):
+        """A 38-line invoice yields 38 items (cross-page accumulation)."""
+        from decimal import Decimal
+
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        with open("samples/全电发票-XML/销_产品_01.xml", "rb") as f:
+            rec = parse_xml_invoice(f.read())
+        assert len(rec.items) == 38
+        assert sum(Decimal(i.amount or 0) for i in rec.items) == Decimal(
+            rec.amount_without_tax
+        )
+
+    def test_xml_items_all_samples_reconcile(self):
+        """Regression: every XML sample's items sum to the header amount.
+
+        This is the guard against a *silently truncated* item list -- rows can
+        be missing while each returned row still looks well-formed.
+        """
+        from decimal import Decimal
+        from pathlib import Path
+
+        from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+        sample_dir = Path("samples/全电发票-XML")
+        files = sorted(sample_dir.glob("*.xml"))
+        assert files, "no XML samples found"
+        for path in files:
+            rec = parse_xml_invoice(path.read_bytes())
+            assert rec is not None, path.name
+            assert rec.items, f"{path.name} produced no items"
+            total = sum(Decimal(i.amount or 0) for i in rec.items)
+            assert total == Decimal(rec.amount_without_tax), (
+                f"{path.name}: items sum {total} != header {rec.amount_without_tax}"
+            )
+
+    def test_pdf_and_ofd_items_are_empty(self):
+        """Only the XML parser fills items; PDF and OFD stay empty."""
+        from fapiao_cn.formats import parse_pdf
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        with open("samples/新电子发票-标准/购_材料_01.pdf", "rb") as f:
+            rec = parse_pdf(f.read())
+        assert rec is not None
+        assert rec.items == []
+
+        with open("samples/全电发票-OFD/烤匠电子发票_332.60元_龚健武.ofd", "rb") as f:
+            rec = parse_ofd_invoice(f.read())
+        assert rec is not None
+        assert rec.items == [], "OFD line items are out of scope for now"
+
     def test_parse_xml_bytes(self):
         from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
 

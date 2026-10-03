@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-03
+
+### Features
+- **商品明细 `items[]`**: `/extract` 响应新增 `items` 数组，仅 **XML 全电发票**填充；PDF / OFD 恒为 `[]`。每个 `<IssuItemInformation>` 一行，含 `name` / `category`（从 `*类别*` 前缀拆分）/ `spec` / `unit` / `quantity` / `unit_price` / `amount` / `tax_rate` / `tax_amount` / `total_amount` / `tax_classification_code`（19 位税收分类编码，退税申报必填）/ `is_reversal`（红字冲销行标记）。金额一律保持字符串原值，负数与带单位数量不被破坏。`item_no` 为解析器生成的 1..N 序号（XML 不带行号）。
+- **明细自洽校验**: 解析后比对「明细金额和 / 税额和 / 价税合计和」与表头，不一致时写 warning 日志。这是发现**明细被静默截断**的唯一手段——缺失的行不会报错，每一行返回出来都看起来完全正常。
+- **Customs declaration**: 海关出口货物报关单专用解析器（操作联 / 出口退税联）。新增 `CustomsDeclarationHeader` / `CustomsDeclarationItem` schema；端点 `POST /extract/customs` 与 `GET /formats/customs`；多页续打（如 6 页退税联 24 个商品）通过 `ctx["full_text"]` 跨页聚合；合并文档（报关单 + 放行条）副页守卫自动忽略 放行条页。Covered by `tests/test_parsers.py::TestCustomsDeclaration`、`tests/test_pipeline.py::TestKnownCustomsDeclarations` 与 `tests/test_api.py::TestExtractCustoms` 共 33 个用例。
+
+### Fixed
+- **Windows 启动崩溃**: `server.py` 的 lifespan 无条件使用 `signal.SIGHUP`，而 Windows 没有该信号，`AttributeError` 在进入 `add_signal_handler` 之前抛出，原有的 `except (NotImplementedError, RuntimeError)` 接不住，导致 uvicorn 启动期直接退出。改为先探测信号是否存在（`getattr(signal, "SIGHUP", None)`）；POSIX 行为逐字不变。
+- **H22 app root 少上一层**: `/health/full` 用 `Path(__file__).resolve().parent.parent` 定位基准，实际落在 `src/` 而非仓库根，导致 `samples_dir_exists` 恒为 `False`、磁盘探针每次在 `src/logs/` 凭空建目录，就绪探针因此永远 503。新增 `_resolve_app_root()`：优先 `FC_APP_ROOT`（镜像内置 `/app`），否则按源码布局 `parents[2]` 推导，保持 H22 要求的 cwd 无关。
+- **H18 告警位语义反转**: `cache_low_hit_ratio` 是告警位（True = 触发告警 = 不健康），而 `pdfplumber` / `disk_writable` 是通过型布尔（True = 正常）。原实现把两者混进同一个 `all()`，语义互相抵消，低命中率告警从来无法降级就绪状态（此前被恒为 False 的 `samples_dir_exists` 意外掩盖）。改为显式区分通过型检查 / 告警位 / 非判定项。
+
+### Changed
+- `samples_dir_exists` 不再参与就绪判定：`samples/` 是 `.gitignore` 掉的开发/CI 素材，镜像不 COPY、容器内本就不存在，按它判定会让生产探针必然 503。
+- 新增环境变量 `FC_APP_ROOT`（默认空，本地一般无需设置）。
+
+### Added
+- **`scripts/start-win.ps1`**: Windows 专用启停脚本（`start` / `-Stop` / `-Status`）。绕开 `fapiao_cn` CLI 在 Windows 上的两个缺陷——`cli.py::_alive()` 用 `os.kill(pid, 0)` 探活会抛 `OSError: [Errno 22]`（Windows 无信号 0），导致 `status` 误报 stale、`stop` 只删 PID 文件却不杀进程；以及 venv 的 `Scripts\python.exe` 会再 fork 出真正持有 socket 的子进程，`Start-Process -PassThru` 拿到的是 wrapper PID。脚本改用 TCP 监听表判断存活与反查真实监听 PID，启动前预检解释器能否 import 依赖，端口被非本项目进程占用时拒绝启动与终止。
+
+### Tests
+- 新增 5 条 `items[]` 回归测试：字段映射与 `*类别*` 拆分、红字冲销行负值与缺失字段、38 行跨页累加、**全部 5 个 XML 样本金额自洽**、以及锁死「PDF / OFD 的 `items` 必须为空」以防 OFD 日后被误开启。
+- Test count: **303 → 376** passing (1 failed: `test_cli.py::TestAtomicPidWrite::test_writes_with_mode_0600` 在 Windows 上不适用——`st_mode` 恒为 `0o666`，POSIX 权限位未实现)。
+- `mypy src/fapiao_cn`：27 文件零问题。`ruff check src tests`：仅剩 `tests/test_parsers.py` 一处既有 E501（中文样本数据行超长）。
+
+## [1.1.0] - 2026-10-02
+
 ### Security
 - **H1 LFI**: `/extract` `file_path` input now gated by `FC_ALLOWED_FILE_PATHS` (CSV directory whitelist). Symlinks and `../` escapes are blocked via `Path.resolve()` + `is_relative_to()`. Empty whitelist disables `file_path` entirely. (#1)
 - **H2 SSRF**: `/extract` URL fetches now block cloud-metadata destinations (`169.254.169.254`, `fd00:ec2::254`). Other internal networks are delegated to Docker / K8s network policy per agreed risk model. Response body is streamed with a `max_file_mb` byte cap. (#2)
@@ -38,7 +64,6 @@ adheres to [Semantic Versioning](https://semver.org/).
 - **H7**: `/formats` descriptions now sourced from the parser registry via `parsers.get_format_descriptions()` so adding a new parser surfaces documentation automatically. (#7)
 - **H9/H34**: Documented that `_KNOWN_TAX_IDS` is process-local; multi-worker / multi-pod deployments don't share the cache. Marked as best-effort, not a contract (GDPR / PIPL advisory). (#9, #34)
 - **H12**: `KeyRecord.verify_rpm` field + per-scope rate limiting so `/verify` has its own quota independent of `/extract`. New env: `FC_API_KEY_DEFAULT_VERIFY_RPM` (default 30). (#12)
-- **Customs declaration**: 海关出口货物报关单专用解析器（操作联 / 出口退税联）。新增 `CustomsDeclarationHeader` / `CustomsDeclarationItem` schema；端点 `POST /extract/customs` 与 `GET /formats/customs`；多页续打（如 6 页退税联 24 个商品）通过 `ctx["full_text"]` 跨页聚合；合并文档（报关单 + 放行条）副页守卫自动忽略 放行条页。Covered by `tests/test_parsers.py::TestCustomsDeclaration`、`tests/test_pipeline.py::TestKnownCustomsDeclarations` 与 `tests/test_api.py::TestExtractCustoms` 共 33 个用例。
 - **H15/H40**: Expanded company-name keyword set (集团/银行/医院/学校/事务所/工作室/酒店/餐厅/商店) plus a negative list (部/办公室/办事处/中心) so department labels aren't mistaken for company names. (#15, #40)
 - **H21**: New e-invoice parser now recognises `名称含义` / `名称查重` / `销售方名称` as parts of a name rather than as separators. (#21)
 - **H25**: `_INVOICE_NO_EMBEDDED_RE` anchored with `(?=\s|$)` so it doesn't grab digits from a later line. (#25)

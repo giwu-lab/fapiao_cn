@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from fapiao_cn.config import settings
 from fapiao_cn.server import app
 
 client = TestClient(app)
@@ -86,6 +88,63 @@ class TestHealth:
         resp = client.get("/health/full", headers=auth_headers)
         # Should not crash with FileNotFoundError on relative paths.
         assert resp.status_code in (200, 503)
+
+    def test_health_full_warning_flag_degrades(self, auth_headers, monkeypatch):
+        """A warning flag set to True must degrade readiness on its own.
+
+        ``cache_low_hit_ratio`` is a warning bit (True = the warning fired),
+        the opposite polarity of the pass checks (True = healthy).  Mixing
+        both into a single ``all()`` cancelled them out, so this alert could
+        never degrade readiness.  It only "passed" before because
+        ``samples_dir_exists`` was permanently False and masked it.
+        """
+        from fapiao_cn.cache import ParseResultCache
+
+        cache = ParseResultCache(capacity=128)
+        for _ in range(60):
+            cache.misses += 1
+        monkeypatch.setattr("fapiao_cn.server.get_cache", lambda: cache)
+        resp = client.get("/health/full", headers=auth_headers)
+        assert resp.json()["checks"]["cache_low_hit_ratio"] is True
+        assert resp.status_code == 503, resp.json()
+
+    def test_health_full_samples_absent_does_not_degrade(self, auth_headers, tmp_path):
+        """H50: missing samples/ is informational and must not gate readiness.
+
+        ``samples/`` is .gitignore'd dev material and is not shipped in the
+        image, so the readiness probe has to stay green without it.
+        """
+        # tmp_path has no samples/ subdir -> the check reports False.
+        monkey_app_root = str(tmp_path)
+        original = settings.app_root
+        settings.app_root = monkey_app_root
+        try:
+            resp = client.get("/health/full", headers=auth_headers)
+        finally:
+            settings.app_root = original
+        assert resp.json()["checks"]["samples_dir_exists"] is False
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["status"] == "ok"
+
+    def test_health_full_resolves_app_root_not_src(self, auth_headers, tmp_path):
+        """H50: the disk probe must target the app root, never ``src/``.
+
+        The off-by-one (``parent.parent`` instead of ``parents[2]``) used to
+        create a stray ``src/logs/`` directory on every probe.
+        """
+        src_dir = Path(__file__).resolve().parent.parent / "src"
+        stray = src_dir / "logs"
+        assert not stray.exists(), f"stray {stray} created by health probe"
+
+        original = settings.app_root
+        settings.app_root = str(tmp_path)
+        try:
+            resp = client.get("/health/full", headers=auth_headers)
+        finally:
+            settings.app_root = original
+        # The probe wrote into tmp_path/logs, i.e. the configured app root.
+        assert resp.status_code in (200, 503)
+        assert (tmp_path / "logs").is_dir()
 
 
 class TestFormats:

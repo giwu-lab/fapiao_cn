@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8091
     title: str = "fapiao_cn"
-    version: str = "1.0.0"
+    version: str = "1.2.0"
 
     # pdfplumber does not render PDF to images; keep for future OCR fallback.
     max_file_mb: int = 32
@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # 留空时 file_path 输入被完全禁用(H1 LFI 防护);非空时仅允许
     # resolve() 后落在任一白名单根目录内的文件,符号链接与 ../ 同步拦截。
     allowed_file_paths: str = ""
+
+    # 应用根目录 (FC_APP_ROOT) —— 留空时按源码布局从 server.py 向上两级推导。
+    # 用于 /health/full 的磁盘可写探针与 samples 检查：这两项需要与进程 cwd
+    # 无关的稳定基准（H22）。Docker 里日志卷挂在 /app/logs，wheel 安装后
+    # __file__ 落在 site-packages，无法再向上定位，故由镜像显式指定为 /app。
+    app_root: str = ""
 
     # API 鉴权 (FC_API_*)
     # 双轨模式：

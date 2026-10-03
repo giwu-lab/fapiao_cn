@@ -109,6 +109,10 @@ def _parse_xml(contents: bytes, filename: str) -> ExtractResponse:
         payee=record.payee,
         reviewer=record.reviewer,
         drawer=record.drawer,
+        # Only the XML parser fills line items; PDF / OFD keep the default
+        # empty list.  Keep in sync with any new InvoiceRecord field -- the
+        # field-by-field copy above silently drops whatever it forgets.
+        items=record.items,
     )
 
 

@@ -15,6 +15,48 @@ from pydantic import BaseModel, Field
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
+class InvoiceItem(BaseModel):
+    """全电发票商品明细（一行）。
+
+    字段名 → ``EInvoice`` schema 元素对应关系::
+
+        name                      -> ItemName              （含 ``*类别*`` 前缀）
+        category                  -> 从 ItemName 的 ``*类别*`` 段拆分
+        spec                      -> SpecMod
+        unit                      -> MeaUnits
+        quantity                  -> Quantity
+        unit_price                -> UnPrice
+        amount                    -> Amount                （不含税金额）
+        tax_rate                  -> TaxRate
+        tax_amount                -> ComTaxAm
+        total_amount              -> TotaltaxIncludedAmount（价税合计）
+        tax_classification_code   -> TaxClassificationCode （19 位税收分类编码）
+
+    全部字段保持 ``str`` 原值：红字冲销行带负号，且部分票种的税率写作
+    ``0.13``、数量可能是 ``4333千克`` 这类带单位的串，转 float 会丢信息。
+
+    ``is_reversal`` 不来自 XML，而是解析器依据负金额推导——红字冲销行在
+    报税时要单独统计，调用方不应把它当普通商品行累加。
+
+    H43: 字段名与国家税务总局 ``EInvoice`` schema 硬编码对应，schema 升级
+    需要同步本文件。
+    """
+
+    item_no: int = 0
+    name: str = ""
+    category: str = ""
+    spec: str = ""
+    unit: str = ""
+    quantity: str = ""
+    unit_price: str = ""
+    amount: str = ""
+    tax_rate: str = ""
+    tax_amount: str = ""
+    total_amount: str = ""
+    tax_classification_code: str = ""
+    is_reversal: bool = False
+
+
 class InvoiceRecord(BaseModel):
     file: str = ""
     page_count: int = 0
@@ -32,12 +74,16 @@ class InvoiceRecord(BaseModel):
     payee: str = ""
     reviewer: str = ""
     drawer: str = ""
+    # 商品明细。仅 XML 全电发票填充；PDF / OFD 恒为空数组
+    # （OFD 暂不解析明细，见 README）。
+    items: List[InvoiceItem] = Field(default_factory=list)
 
     def stripped(self) -> "InvoiceRecord":
         """Return a copy with all whitespace removed from string fields."""
 
         # ``page_count`` is an int and must round-trip verbatim; the
-        # rest are strings that get their whitespace stripped.
+        # rest are strings that get their whitespace stripped.  ``items``
+        # is a list of models and passes through untouched.
         data = self.model_dump()
         for k, v in data.items():
             if isinstance(v, str):
@@ -69,6 +115,8 @@ class ExtractResponse(BaseModel):
     payee: str = ""
     reviewer: str = ""
     drawer: str = ""
+    # 商品明细。仅 XML 全电发票填充；PDF / OFD 恒为空数组。
+    items: List[InvoiceItem] = Field(default_factory=list)
     message: str = "success"
 
 

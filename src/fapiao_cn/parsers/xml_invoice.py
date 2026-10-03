@@ -17,12 +17,17 @@ Notes:
 
 from __future__ import annotations
 
-from typing import Optional, Union
+import logging
+import re
+from decimal import Decimal
+from typing import List, Optional, Union
 
 import defusedxml.ElementTree as DET
 
-from fapiao_cn.schemas import InvoiceRecord
+from fapiao_cn.schemas import InvoiceItem, InvoiceRecord
 from fapiao_cn.utils import normalize_issue_date
+
+log = logging.getLogger("fapiao_cn.xml_invoice")
 
 
 def parse_xml_invoice(xml_input: Union[bytes, str]) -> Optional[InvoiceRecord]:
@@ -114,6 +119,115 @@ def _format_date(date_str: str) -> str:
     return normalize_issue_date(date_str)
 
 
+# ``ItemName`` is written as ``*类别*品名`` in every 数电票 sample (47/47),
+# e.g. ``*齿轮*从动齿轮（精车坯）``.  Split the leading category so callers
+# do not have to re-parse the asterisk-delimited prefix.
+_ITEM_NAME_RE = re.compile(r"^\*([^*]+)\*(.*)$", re.S)
+
+# ``InvoiceItem`` field -> ``EInvoice`` schema element name.
+_ITEM_FIELD_TAGS = {
+    "name": "ItemName",
+    "spec": "SpecMod",
+    "unit": "MeaUnits",
+    "quantity": "Quantity",
+    "unit_price": "UnPrice",
+    "amount": "Amount",
+    "tax_rate": "TaxRate",
+    "tax_amount": "ComTaxAm",
+    "total_amount": "TotaltaxIncludedAmount",
+    "tax_classification_code": "TaxClassificationCode",
+}
+
+
+def _is_negative(value: str) -> bool:
+    """True when a numeric string carries a leading minus sign (红字冲销行)."""
+
+    return bool(value) and value.lstrip().startswith("-")
+
+
+def _parse_items(eid: DET.Element) -> List[InvoiceItem]:
+    """Extract the ``<IssuItemInformation>`` line items under ``EInvoiceData``.
+
+    Every 数电票 writer emits one ``<IssuItemInformation>`` per line, repeated
+    as siblings.  All fields except the quantity/price quartet
+    (``SpecMod``/``MeaUnits``/``Quantity``/``UnPrice``) are present on every
+    row; the quartet is absent on 红字冲销行, which carries only a negative
+    amount triple.  Missing tags therefore yield ``""`` rather than a row
+    being skipped — the row still has to be reported so the amounts reconcile.
+    """
+
+    items: List[InvoiceItem] = []
+    for idx, elem in enumerate(eid.findall("IssuItemInformation"), start=1):
+        values = {
+            field: _text(elem, tag) for field, tag in _ITEM_FIELD_TAGS.items()
+        }
+        raw_name = values["name"]
+        category = ""
+        name = raw_name
+        m = _ITEM_NAME_RE.match(raw_name)
+        if m:
+            category, name = m.group(1).strip(), m.group(2).strip()
+        items.append(
+            InvoiceItem(
+                item_no=idx,
+                name=name,
+                category=category,
+                spec=values["spec"],
+                unit=values["unit"],
+                quantity=values["quantity"],
+                unit_price=values["unit_price"],
+                amount=values["amount"],
+                tax_rate=values["tax_rate"],
+                tax_amount=values["tax_amount"],
+                total_amount=values["total_amount"],
+                tax_classification_code=values["tax_classification_code"],
+                is_reversal=_is_negative(values["amount"]),
+            )
+        )
+    return items
+
+
+def _check_items_reconcile(items: List[InvoiceItem], basic_info: DET.Element) -> None:
+    """Warn when the line items do not sum to the header totals.
+
+    This is the only signal that catches a *silently truncated* item list —
+    every extracted row can look perfectly well-formed while rows are
+    missing, so consumers must not have to re-derive the check themselves.
+    """
+
+    if not items:
+        return
+
+    def _total(field: str) -> Decimal:
+        acc = Decimal(0)
+        for it in items:
+            try:
+                acc += Decimal(getattr(it, field) or 0)
+            except (ArithmeticError, ValueError):
+                continue
+        return acc
+
+    for item_field, header_tag in (
+        ("amount", "TotalAmWithoutTax"),
+        ("tax_amount", "TotalTaxAm"),
+        ("total_amount", "TotalTax-includedAmount"),
+    ):
+        header = _text(basic_info, header_tag)
+        if not header:
+            continue
+        try:
+            diff = _total(item_field) - Decimal(header)
+        except (ArithmeticError, ValueError):
+            continue
+        if abs(diff) >= Decimal("0.01"):
+            log.warning(
+                "XML invoice line items do not reconcile with header: "
+                "field=%s items_sum=%s header=%s diff=%s rows=%d "
+                "-- the item list is likely incomplete",
+                item_field, _total(item_field), header, diff, len(items),
+            )
+
+
 def extract_invoice_from_root(root: DET.Element) -> Optional[InvoiceRecord]:
     """Extract ``InvoiceRecord`` fields from a parsed ``EInvoice`` XML root.
 
@@ -140,6 +254,9 @@ def extract_invoice_from_root(root: DET.Element) -> Optional[InvoiceRecord]:
 
     invoice_type = _detect_invoice_type(root)
 
+    items = _parse_items(eid)
+    _check_items_reconcile(items, basic_info)
+
     return InvoiceRecord(
         file="",
         page_count=1,
@@ -157,4 +274,5 @@ def extract_invoice_from_root(root: DET.Element) -> Optional[InvoiceRecord]:
         payee=_text(basic_info, "Payee"),
         reviewer=_text(basic_info, "Reviewer"),
         drawer=_text(basic_info, "Drawer"),
+        items=items,
     ).stripped()

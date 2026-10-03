@@ -15,6 +15,7 @@ import signal
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Awaitable, Callable, MutableMapping, Optional
 
 import uvicorn
@@ -47,6 +48,25 @@ log = logging.getLogger("fapiao_cn.server")
 # /formats descriptions are sourced from the parser registry (H7)
 # so adding a new parser automatically surfaces here.
 _FORMATS = get_format_descriptions()
+
+
+def _resolve_app_root() -> Path:
+    """H22/H50：解析与进程 cwd 无关的“应用根目录”。
+
+    ``/health/full`` 的磁盘可写探针与 samples 存在性检查都需要一个稳定基准。
+
+    此处原先用 ``Path(__file__).resolve().parent.parent``，但 ``server.py`` 位于
+    ``src/fapiao_cn/``，**少上了一层**，实际基准是 ``src/`` 而不是仓库根。后果：
+    ``samples_dir_exists`` 恒为 False（真实样本在仓库根的 ``samples/``），
+    磁盘探针也会在 ``src/logs/`` 凭空建目录。就绪探针因此永远 503。
+
+    优先 ``FC_APP_ROOT``（Docker 镜像里设为 ``/app``，即日志卷挂载点）——
+    wheel 安装后 ``__file__`` 落在 site-packages，无法再向上定位到 ``/app``。
+    未设置时按源码布局从本文件向上两级（``src/fapiao_cn/server.py`` → 仓库根）推导。
+    """
+    if settings.app_root:
+        return Path(settings.app_root).resolve()
+    return Path(__file__).resolve().parents[2]
 
 
 # Field dictionary for the customs-declaration schema, returned by
@@ -279,6 +299,11 @@ def create_app() -> FastAPI:
         log.error("API key store failed to load; refusing to start: %s", exc)
         raise
 
+    # SIGHUP 是 POSIX-only 信号：Windows 上 ``signal.SIGHUP`` 根本不存在，
+    # 读取属性本身就会抛 AttributeError（在进入 add_signal_handler 之前），
+    # 因此这里必须先探测信号是否存在，而不能只靠捕获 add_signal_handler 的异常。
+    _sighup = getattr(signal, "SIGHUP", None)
+
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         # Register SIGHUP for hot-reloading KeyStore (H6) and cache (H42).
@@ -301,16 +326,18 @@ def create_app() -> FastAPI:
             except Exception as exc:  # noqa: BLE001
                 log.error("SIGHUP reload (cache) failed: %s", exc)
 
-        try:
-            loop.add_signal_handler(signal.SIGHUP, _reload_on_sighup)
-        except (NotImplementedError, RuntimeError):
-            # Windows / non-main thread — silently skip.
-            pass
+        if _sighup is not None:
+            try:
+                loop.add_signal_handler(_sighup, _reload_on_sighup)
+            except (NotImplementedError, RuntimeError):
+                # Windows / non-main thread — silently skip.
+                pass
         yield
-        try:
-            loop.remove_signal_handler(signal.SIGHUP)
-        except (NotImplementedError, RuntimeError, ValueError):
-            pass
+        if _sighup is not None:
+            try:
+                loop.remove_signal_handler(_sighup)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass
 
     app = FastAPI(title=settings.title, version=settings.version, lifespan=_lifespan)
 
@@ -363,13 +390,10 @@ def create_app() -> FastAPI:
         except Exception:
             checks["pdfplumber"] = False
 
-        # H22: writable log directory is required for /extract to leave
-        # audit traces.  Resolve relative to the package root rather
-        # than the process cwd.
+        # H22: 可写日志目录是 /extract 留下审计记录的前提。用与 cwd 无关的
+        # app root 定位，避免探针在 src/ 下凭空建目录。
         try:
-            from pathlib import Path
-            pkg_root = Path(__file__).resolve().parent.parent
-            log_dir = pkg_root / "logs"
+            log_dir = _resolve_app_root() / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             test_file = log_dir / ".health_probe"
             test_file.write_text("ok")
@@ -378,17 +402,11 @@ def create_app() -> FastAPI:
         except Exception:
             checks["disk_writable"] = False
 
-        checks["parsers_count"] = 6  # airline/train/merged_code/non_tax_receipt/old/new (+ xml)
-        # H22: resolve paths relative to the fapiao_cn package, not the
-        # process cwd.  ``fapiao_cn start`` may have a different cwd
-        # than the package install root.
-        from pathlib import Path as _Path
-        pkg_root = _Path(__file__).resolve().parent.parent
         # H27: parsers_count derived from the registry, not a hard-coded
         # literal that drifts as parsers get added.
         from fapiao_cn.parsers import _RULES as _PARSER_RULES  # noqa: PLC0415
         checks["parsers_count"] = len(_PARSER_RULES) + 1  # +1 for the XML parser
-        checks["samples_dir_exists"] = (pkg_root / "samples").is_dir()
+        checks["samples_dir_exists"] = (_resolve_app_root() / "samples").is_dir()
         checks["uptime_seconds"] = int(time.time() - _START_TIME)
         cache_stats = get_cache().stats()
         # H18: warn when the cache hit ratio is suspiciously low.
@@ -399,8 +417,34 @@ def create_app() -> FastAPI:
             checks["cache_low_hit_ratio"] = cache_stats["hit_ratio"] < 0.05
         checks["cache"] = cache_stats
 
-        bool_checks = [v for v in checks.values() if isinstance(v, bool)]
-        ok = all(bool_checks) if bool_checks else True
+        # 就绪判定。这里有两类语义相反的布尔，不能直接丢进同一个 all()：
+        #
+        #   通过型检查 (pass check)：True = 正常。False 才算不健康。
+        #   告警位   (warning flag)：True = **触发了**告警，即不健康。
+        #
+        # 早期实现把两者混在 ``all(bool_checks)`` 里，语义正好抵消，导致 H18 的
+        # 低命中率告警永远无法把就绪状态打成 degraded（当时被恒为 False 的
+        # samples_dir_exists 意外掩盖）。这里显式区分。
+        #
+        # H50: ``samples/`` 是 .gitignore 掉的开发/CI 素材（真实发票含敏感购销方
+        # 数据），镜像内不 COPY、容器里本就不存在。它缺失不代表服务不可用，
+        # 因此只作信息展示，不参与判定——否则生产环境该探针必然 503。
+        _NON_GATING_CHECKS = {"samples_dir_exists"}
+        _WARNING_FLAGS = {"cache_low_hit_ratio"}
+
+        failing: list[str] = []
+        for key, value in checks.items():
+            if not isinstance(value, bool) or key in _NON_GATING_CHECKS:
+                continue
+            if key in _WARNING_FLAGS:
+                if value:
+                    failing.append(key)
+            elif not value:
+                failing.append(key)
+
+        ok = not failing
+        if not ok:
+            log.warning("readiness degraded; failing checks: %s", ", ".join(sorted(failing)))
         return JSONResponse(
             status_code=200 if ok else 503,
             content={"status": "ok" if ok else "degraded", "checks": checks},

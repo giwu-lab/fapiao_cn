@@ -63,6 +63,7 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels \
 
 ENV FC_HOST=0.0.0.0 \
     FC_PORT=8091 \
+    FC_APP_ROOT=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Shanghai
