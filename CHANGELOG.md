@@ -6,6 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-04
+
+### Fixed
+- **`scripts/start-win.ps1` 启动后卡住不退出**: 原写法用
+  `Start-Process -RedirectStandardOutput/Error` 启动 uvicorn。PowerShell 的
+  `-WindowStyle Hidden` 是 `SW_HIDE` + **继承控制台**（不是 `CREATE_NO_WINDOW`），
+  叠加 `CreateProcess` 的 `bInheritHandles=TRUE`，导致 uvicorn 一直持有调用方
+  shell 的 stdout 管道写端。调用方 shell 早已退出却等不到 EOF，表现为「启动成功
+  但命令卡到被超时掐断」，且日志里没有任何错误。
+  改由 `cmd.exe` 承担 `>` / `2>` 重定向、Python 进程从 cmd 继承句柄，继承链与
+  调用方彻底断开。日志输出不受影响。
+- **`-Stop` 写 PID 文件会抛异常**: 运行中的 uvicorn 持有 `server.err.log` 的
+  文件句柄时 `Set-Content` 写入被拒，导致整个 `-Stop` 失败。改用
+  `-ErrorAction SilentlyContinue`。同时说明：日志文件名固定为
+  `logs/server.{out,err}.log`，**同名旧实例存活时新实例无法启动**（cmd 打不开
+  被占用的日志文件），需先 `-Stop`。
+
+### 验证
+四组对照实验定位（均为嵌套 `powershell -File` 调用）：
+
+| 场景 | 结果 |
+| --- | --- |
+| sleeper + `Start-Process` 重定向 | 正常返回 |
+| uvicorn + `Start-Process` 重定向 | 正常返回 |
+| sleeper + 嵌套 `-File` | 正常返回 |
+| uvicorn + 嵌套 `-File` + 直接重定向 | **卡死**（原写法） |
+| uvicorn + 嵌套 `-File` + cmd 内部重定向 | 正常返回（修复后） |
+
+修复后：嵌套调用 **3.2 s** 返回（修复前卡满 180 s 超时），三个日志文件
+（`server.err.log` / `server.out.log` / `audit.log`）均正常写入，
+`/extract` 冒烟返回 `message=success` 且 `items` 4 条。
+
 ## [1.2.0] - 2026-10-03
 
 ### Features

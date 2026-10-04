@@ -240,7 +240,9 @@ if ($Stop) {
         }
     }
     if (Test-Path $PidFile) {
-        Set-Content -Path $PidFile -Value '' -Encoding ascii
+        # 用 -ErrorAction SilentlyContinue：运行中的 uvicorn 仍持有 server.err.log
+        # 的句柄，写入会被拒绝，此时不该让 -Stop 整体失败。
+        Set-Content -Path $PidFile -Value '' -Encoding ascii -ErrorAction SilentlyContinue
         Write-Step "已清空 PID 文件 logs/fapiao_cn.pid"
     }
     exit 0
@@ -275,19 +277,34 @@ if ($existing) {
 }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-if (Test-Path $PidFile) { Set-Content -Path $PidFile -Value '' -Encoding ascii }
+if (Test-Path $PidFile) { Set-Content -Path $PidFile -Value '' -Encoding ascii -ErrorAction SilentlyContinue }
 
 $argList = @('-m', 'uvicorn', $AppTarget, '--host', $BindHost, '--port', "$Port")
 if (Test-Path $LogConfig) { $argList += @('--log-config', $LogConfig) }
 
-# 用 Start-Process 拿到真正脱离当前 shell 的进程（-PassThru 给的是 wrapper PID，
-# 真实监听 PID 要等启动成功后从监听表反查）。
-$proc = Start-Process -FilePath $pyExe -ArgumentList $argList `
+# ── 启动方式（Windows 特有坑）────────────────────────────────────────────
+# 不能直接 ``Start-Process -RedirectStandardOutput/Error``：那条路径下子进程会
+# 继承调用方 shell 的 **控制台**，而 PowerShell 的 -WindowStyle Hidden 是
+# SW_HIDE + 继承控制台（不是 CREATE_NO_WINDOW），CreateProcess 又是
+# bInheritHandles=TRUE —— 于是 uvicorn 会一直攥着调用方的 stdout 管道写端。
+# 调用方的 shell 即使已经退出也等不到 EOF，表现为「启动成功但命令卡住、
+# 直到被超时掐断」，日志里却什么错都没有。
+#
+# 解法：让 **cmd.exe** 承担重定向（``>`` / ``2>``），再用
+# ``Start-Process -WindowStyle Hidden`` 启动 cmd。此时继承链断在 cmd 这一层，
+# uvicorn 只继承 cmd 的句柄（已指向日志文件），与调用方无关。
+#
+# 逐项验证过（均为 嵌套 powershell 调用）:
+#   sleeper + Start-Process 重定向        -> 正常返回
+#   uvicorn + Start-Process 直接重定向     -> 正常返回
+#   sleeper + 嵌套 -File                    -> 正常返回
+#   uvicorn + 嵌套 -File + 直接重定向        -> **卡死**（即本脚本原写法）
+#   uvicorn + 嵌套 -File + cmd 内部重定向     -> 正常返回 ✓
+$cmdArgs = "/c `"`"$($pyExe -replace '"', '""')`" $($argList -join ' ') > `"$OutLog`" 2> `"$ErrLog`""
+$proc = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdArgs `
     -WorkingDirectory $RepoRoot `
-    -RedirectStandardOutput $OutLog `
-    -RedirectStandardError $ErrLog `
     -PassThru -WindowStyle Hidden
-Write-Step "已拉起 wrapper 进程 PID=$($proc.Id)，等待 /health 就绪（上限 ${TimeoutSec}s）..."
+Write-Step "已拉起启动器进程 PID=$($proc.Id)，等待 /health 就绪（上限 ${TimeoutSec}s）..."
 
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $ready = $false

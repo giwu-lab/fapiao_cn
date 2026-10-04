@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8091
     title: str = "fapiao_cn"
-    version: str = "1.2.0"
+    version: str = "1.2.1"
 
     # pdfplumber does not render PDF to images; keep for future OCR fallback.
     max_file_mb: int = 32
