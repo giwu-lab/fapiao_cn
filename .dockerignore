@@ -13,6 +13,16 @@ build/
 .eggs/
 *.tar.gz
 
+# 虚拟环境（本地开发产物，体积大且与镜像无关）
+# 注意：.gitignore 里也有这几条 —— 两边必须同步，否则 `pip install -e .`
+# 之后本地的 .venv/ 会整个进构建上下文（>200 MB）。
+.venv/
+venv/
+env/
+
+# 本地密钥文件（操作者自建的 API key 存储；与 .env 同等对待）
+keys.json
+
 # 注：wheels/ 不忽略 —— 离线构建方案需要它被 COPY 进镜像。
 # 没用离线方案的用户 docker build 不会用到 wheels/（Dockerfile 不再引用）。
 
