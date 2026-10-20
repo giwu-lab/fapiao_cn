@@ -76,6 +76,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   现在 Dockerfile 会自动判断：`wheels/` 里有 `.whl` 就走离线
   （`--no-index --find-links=/wheels`，全程不联网），否则回退到构建期从
   镜像源在线下载。两条路产出同样的镜像，**都不需要改 Dockerfile**。
+  模式在第一个 RUN 里判定一次并记进 `/etc/pip-mode` —— 后续步骤不能重新
+  判断「`wheels/` 里有没有 `.whl`」，因为在线分支会把依赖下载进
+  `wheels/`，之后这个条件就不再代表原始模式了。
 
   配套：`wheels/.gitkeep` 入库（`.gitignore` 从 `wheels/` 改为
   `wheels/*` + `!wheels/.gitkeep`），保证全新克隆里 `COPY wheels /wheels`

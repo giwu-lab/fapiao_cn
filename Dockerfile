@@ -17,17 +17,24 @@ COPY wheels /wheels
 # 可选：切换 pip 镜像源（默认阿里云）。传 --build-arg PIP_INDEX_URL= 走官方源。
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
-# 一次完成：装好构建依赖（hatchling），并把运行时依赖 wheel 备齐到 /wheels。
+# 一次完成：判定离线/在线、装好构建依赖（hatchling）、并把运行时依赖 wheel
+# 备齐到 /wheels。
+#
+# 模式必须在这里判定一次并记进 /etc/pip-mode —— 后续步骤不能重新判断
+# 「/wheels 里有没有 .whl」：在线分支会把依赖下载进 /wheels，之后这个条件
+# 就不再代表原始模式了。
 RUN set -eu; \
     if ls /wheels/*.whl >/dev/null 2>&1; then \
-        echo ">>> offline mode: using prebuilt wheels in /wheels"; \
+        echo offline > /etc/pip-mode; \
         PIP_ARGS="--no-index --find-links=/wheels"; \
+        echo ">>> offline mode: using prebuilt wheels in /wheels"; \
     else \
-        echo ">>> online mode: downloading runtime deps from ${PIP_INDEX_URL}"; \
+        echo online > /etc/pip-mode; \
         PIP_ARGS="--index-url ${PIP_INDEX_URL}"; \
+        echo ">>> online mode: downloading runtime deps from ${PIP_INDEX_URL}"; \
     fi; \
     pip install --no-cache-dir ${PIP_ARGS} hatchling; \
-    if ! ls /wheels/*.whl >/dev/null 2>&1; then \
+    if [ "$(cat /etc/pip-mode)" = online ]; then \
         pip download --no-cache-dir ${PIP_ARGS} --dest /wheels \
             pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings \
             python-multipart httpx pyyaml defusedxml; \
@@ -37,19 +44,19 @@ RUN set -eu; \
 # don't invalidate the (large) pip download cache.
 COPY pyproject.toml README.md ./
 RUN set -eu; \
-    if ls /wheels/*.whl >/dev/null 2>&1; then \
+    if [ "$(cat /etc/pip-mode)" = offline ]; then \
         pip wheel --no-cache-dir --no-deps --no-index --find-links=/wheels --wheel-dir=/wheels .; \
     else \
-        pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels .; \
+        pip wheel --no-cache-dir --no-deps --index-url "${PIP_INDEX_URL}" --wheel-dir=/wheels .; \
     fi
 
 # Now copy src/ separately and rebuild the project wheel.
 COPY src ./src
 RUN set -eu; \
-    if ls /wheels/*.whl >/dev/null 2>&1; then \
+    if [ "$(cat /etc/pip-mode)" = offline ]; then \
         pip wheel --no-cache-dir --no-deps --no-index --find-links=/wheels --wheel-dir=/wheels .; \
     else \
-        pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels .; \
+        pip wheel --no-cache-dir --no-deps --index-url "${PIP_INDEX_URL}" --wheel-dir=/wheels .; \
     fi
 
 # ── Stage 2: runtime ────────────────────────────────────────────────
