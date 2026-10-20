@@ -271,7 +271,11 @@ async def resolve_batch_input(request: Request) -> Tuple[Optional[List[Tuple[byt
     if len(uploaded) > max_files:
         return None, f"Too many files: {len(uploaded)} > {max_files}"
 
-    max_single = settings.max_batch_single_mb * 1024 * 1024
+    # 单文件上限与 /extract 共用 FC_MAX_FILE_MB，不再另设 batch 专用值：
+    # 同一个文件走单文件还是走批量，不该因为入口不同而有不同的可接受边界。
+    # 注意 parse_pdf 内部（formats.py）还会再按同一个 max_file_mb 兜底校验一次，
+    # 这里的闸门作用是让超限文件在批量入口就以 400 整批拒绝，而不是逐项 error。
+    max_single = settings.max_file_mb * 1024 * 1024
     max_total = settings.max_batch_total_mb * 1024 * 1024
 
     total = 0

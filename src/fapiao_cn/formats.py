@@ -82,6 +82,9 @@ def _parse_ofd(contents: bytes, filename: str) -> ExtractResponse:
         payee=record.payee,
         reviewer=record.reviewer,
         drawer=record.drawer,
+        expense_category=record.expense_category,
+        expense_category_label=record.expense_category_label,
+        expense_category_source=record.expense_category_source,
     )
 
 
@@ -113,6 +116,9 @@ def _parse_xml(contents: bytes, filename: str) -> ExtractResponse:
         # empty list.  Keep in sync with any new InvoiceRecord field -- the
         # field-by-field copy above silently drops whatever it forgets.
         items=record.items,
+        expense_category=record.expense_category,
+        expense_category_label=record.expense_category_label,
+        expense_category_source=record.expense_category_source,
     )
 
 
@@ -134,6 +140,9 @@ def _build_response(record: InvoiceRecord, filename: str, message: str) -> Extra
         payee=record.payee,
         reviewer=record.reviewer,
         drawer=record.drawer,
+        expense_category=record.expense_category,
+        expense_category_label=record.expense_category_label,
+        expense_category_source=record.expense_category_source,
         message=message,
     )
 

@@ -1,9 +1,9 @@
 """``fapiao_cn`` console script — lifecycle management for the HTTP service.
 
-* ``fapiao_cn start``    — launch uvicorn in the background
+* ``fapiao_cn start``    — launch uvicorn in the background (logs ``logs/server.log``)
 * ``fapiao_cn stop``     — kill the background process (PID file ``logs/fapiao_cn.pid``)
 * ``fapiao_cn restart``  — stop + start
-* ``fapiao_cn dev``      — foreground uvicorn with auto-reload
+* ``fapiao_cn dev``      — background uvicorn with auto-reload (logs ``logs/server-dev.log``)
 * ``fapiao_cn test``     — run ``pytest``
 * ``fapiao_cn status``   — show whether the background process is alive
 
@@ -22,6 +22,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -30,12 +31,19 @@ from fapiao_cn.config import settings
 PID_FILE = "logs/fapiao_cn.pid"
 LOG_DIR = "logs"
 LOG_FILE = "logs/server.log"
+DEV_LOG_FILE = "logs/server-dev.log"
 LOG_CONFIG = "deploy/log_config.yaml"
 APP_TARGET = "fapiao_cn.server:app"
 # H46: run uvicorn with a fixed cwd (the package root) regardless of
 # where the user invoked ``fapiao_cn start`` from.  This makes logs /
 # sample lookups deterministic.
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent
+
+#: ``signal.SIGKILL`` is POSIX-only — it does not exist on Windows, where
+#: referencing it raises ``AttributeError``.  There, ``os.kill(pid, SIGTERM)``
+#: maps to ``TerminateProcess``, which is an unconditional kill anyway, so
+#: falling back to SIGTERM keeps the escalation path working.
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 def _pid_path() -> Path:
@@ -53,11 +61,30 @@ def _read_pid() -> Optional[int]:
 
 
 def _alive(pid: int) -> bool:
+    """True iff the PID exists **and** is not in zombie state.
+
+    ``os.kill(pid, 0)`` returns success on zombie processes (the PID is
+    still in the process table until the parent reaps it via ``wait()``),
+    so a naive kill(0) check would let ``cmd_stop`` think the daemon is
+    alive long after SIGTERM actually killed it.  Read ``/proc/PID/status``
+    to detect the ``Z`` state explicitly.  This is Linux-only; on other
+    platforms (e.g. macOS dev) the kill(0) result alone is used.
+    """
+
     try:
         os.kill(pid, 0)
-        return True
     except OSError:
         return False
+    # Linux: zombie state == dead-from-reaper's-perspective.
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if line.startswith("State:"):
+                    return "Z" not in line.split()
+    except (OSError, IOError):
+        # /proc not readable (macOS / sandboxed): fall back to kill(0).
+        return True
+    return True
 
 
 def _port_available(host: str, port: int) -> bool:
@@ -99,6 +126,87 @@ def _atomic_write_pid(pid: int) -> None:
         except OSError:
             pass
         raise
+
+
+def _signal_process(pid: int, sig: int) -> bool:
+    """Signal ``pid``'s process group; fall back to the process itself.
+
+    ``os.killpg`` is POSIX-only — it does not exist on Windows at all, so
+    calling it unguarded raises ``AttributeError`` and takes the whole CLI
+    down (``fapiao_cn stop`` / ``restart`` would die with a traceback
+    instead of stopping the server).  Windows has no process groups, so
+    there we signal the single process instead: ``os.kill(pid, SIGTERM)``
+    maps to ``TerminateProcess`` there.
+
+    Returns True when a signal was actually delivered, False when the
+    target was already gone / not ours / the signal could not be sent.
+    """
+
+    killpg = getattr(os, "killpg", None)
+    if killpg is None:
+        # No process groups on this platform (Windows): signal the process.
+        try:
+            os.kill(pid, sig)
+            return True
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+    try:
+        killpg(pid, sig)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        # Already dead, no permission (foreign pid), or not a process-group
+        # leader — the caller falls through to the liveness probe.
+        return False
+
+
+def _wait_pid_gone(pid: int, *, grace_seconds: float = 10.0, poll_interval: float = 0.1) -> bool:
+    """Wait until ``pid`` no longer exists, with a hard deadline.
+
+    Sends ``SIGTERM`` first (whole process group, so uvicorn's reloader
+    child + worker both get the signal), then polls ``os.kill(pid, 0)``
+    every ``poll_interval`` seconds.  If the process is still alive after
+    ``grace_seconds``, escalates to ``SIGKILL`` and waits another
+    ``grace_seconds / 2`` before giving up.
+
+    Returns True when the process is gone, False when the deadline was
+    exceeded.
+    """
+
+    deadline = time.monotonic() + grace_seconds
+    _signal_process(pid, signal.SIGTERM)
+
+    while time.monotonic() < deadline:
+        if not _alive(pid):
+            return True
+        time.sleep(poll_interval)
+
+    # Grace expired — escalate to SIGKILL with a short extra window.
+    if not _signal_process(pid, _SIGKILL):
+        return True
+    kill_deadline = time.monotonic() + max(0.5, grace_seconds / 2)
+    while time.monotonic() < kill_deadline:
+        if not _alive(pid):
+            return True
+        time.sleep(poll_interval)
+    return not _alive(pid)
+
+
+def _wait_port_free(
+    host: str, port: int, *, timeout: float = 5.0, poll_interval: float = 0.1
+) -> bool:
+    """Poll ``(host, port)`` until the bind succeeds or ``timeout`` elapses.
+
+    After SIGTERM the kernel needs a moment to release the listening
+    socket (TIME_WAIT etc.); without this probe ``cmd_start`` would
+    race the kernel and bail out with EADDRINUSE on the very next call.
+    """
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _port_available(host, port):
+            return True
+        time.sleep(poll_interval)
+    return _port_available(host, port)
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -143,6 +251,17 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 
 def cmd_stop(_args: argparse.Namespace) -> int:
+    """Terminate the background process synchronously.
+
+    Sends SIGTERM to the whole process group (uvicorn reloader + worker
+    when running ``cmd_dev``), waits for the process to exit (with a
+    SIGKILL fallback), then waits for the listening socket to be
+    released so the next ``start`` / ``dev`` won't race on EADDRINUSE.
+
+    The PID file is removed **last** so a crash here leaves the PID
+    intact for a forensic ``fapiao_cn status`` follow-up.
+    """
+
     pid = _read_pid()
     if pid is None:
         print("[fapiao_cn] no pid file")
@@ -151,30 +270,95 @@ def cmd_stop(_args: argparse.Namespace) -> int:
         print(f"[fapiao_cn] pid {pid} not alive; cleaning pid file")
         _pid_path().unlink(missing_ok=True)
         return 0
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+
+    # Pull host/port out of the environment (or fall back to settings)
+    # so the port-release wait can target the same socket we bound to.
+    from fapiao_cn.config import settings
+
+    host = os.environ.get("FC_HOST", settings.host)
+    port = int(os.environ.get("FC_PORT", str(settings.port)))
+
+    gone = _wait_pid_gone(pid, grace_seconds=10.0)
+    port_free = _wait_port_free(host, port, timeout=5.0)
     _pid_path().unlink(missing_ok=True)
-    print(f"[fapiao_cn] stopped pid={pid}")
+
+    if not gone:
+        print(
+            f"[fapiao_cn] pid {pid} did not exit within 10s "
+            "(SIGKILL sent); proceeding",
+            file=sys.stderr,
+        )
+    elif not port_free:
+        print(
+            f"[fapiao_cn] stopped pid={pid} but port {port} still busy "
+            "(next start will bail)",
+            file=sys.stderr,
+        )
+    else:
+        print(f"[fapiao_cn] stopped pid={pid}")
     return 0
 
 
 def cmd_restart(args: argparse.Namespace) -> int:
-    cmd_stop(args)
+    """Stop then start, in that order.  ``cmd_stop`` blocks until the
+    socket is actually released, so ``cmd_start``'s port probe will
+    succeed."""
+
+    stop_rc = cmd_stop(args)
+    if stop_rc != 0:
+        return stop_rc
     return cmd_start(args)
 
 
 def cmd_dev(args: argparse.Namespace) -> int:
-    # H46: dev mode also pins cwd so log_config.yaml is found.
-    os.chdir(PACKAGE_ROOT)
-    import uvicorn
+    """Background uvicorn with --reload; logs to ``logs/server-dev.log``.
 
-    uvicorn.run(
+    Mirrors ``cmd_start`` so ``stop`` / ``restart`` / ``status`` work
+    uniformly regardless of which mode started the process: same PID
+    file, same port-availability preflight, same ``start_new_session``.
+    """
+
+    pid = _read_pid()
+    if pid and _alive(pid):
+        print(f"[fapiao_cn] already running (pid={pid})")
+        return 0
+    # H20: bail out early if the chosen port is already taken (same
+    # guard as cmd_start).
+    if not _port_available(args.host, args.port):
+        print(
+            f"[fapiao_cn] port {args.port} on {args.host} is already in use; "
+            "refusing to start uvicorn",
+            file=sys.stderr,
+        )
+        return 1
+    Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
+    log = open(DEV_LOG_FILE, "ab", buffering=0)
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
         APP_TARGET,
-        host=args.host,
-        port=args.port,
-        reload=True,
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+        "--reload",
+    ]
+    log_config_path = Path(LOG_CONFIG)
+    if log_config_path.exists():
+        cmd.extend(["--log-config", str(log_config_path)])
+    # H46: explicit cwd so log paths inside the app resolve consistently.
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        cwd=str(PACKAGE_ROOT),
+    )
+    _atomic_write_pid(proc.pid)
+    print(
+        f"[fapiao_cn] dev started pid={proc.pid} on {args.host}:{args.port} "
+        f"→ {DEV_LOG_FILE}"
     )
     return 0
 

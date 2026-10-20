@@ -100,15 +100,66 @@ class TestBatchExtract:
         assert resp.status_code == 400
         assert "Too many files" in resp.json()["detail"]
 
-    def test_single_file_too_large(self, auth_headers):
-        """A single file > max_batch_single_mb should return 400."""
-        big = b"x" * (11 * 1024 * 1024)  # 11 MB
+    def test_single_file_too_large(self, monkeypatch, auth_headers):
+        """A single file > FC_MAX_FILE_MB should return 400."""
+        from fapiao_cn.config import settings
+        # 临时下调单文件上限，避免为测试真分配整份 FC_MAX_FILE_MB
+        monkeypatch.setattr(settings, "max_file_mb", 1)
+        big = b"x" * (2 * 1024 * 1024)  # 2 MB
         data = (
             ("files", ("big.pdf", io.BytesIO(big), "application/pdf")),
         )
         resp = client.post("/extract/batch", headers=auth_headers, files=data)
         assert resp.status_code == 400
         assert "File too large" in resp.json()["detail"]
+
+    def test_single_file_limit_shared_with_extract(self, monkeypatch, auth_headers):
+        """/extract 与 /extract/batch 必须共用同一个单文件上限 FC_MAX_FILE_MB。
+
+        同一个超限文件送两个端点都要被拒，只是状态码语义不同：
+        批量入口在闸门处整批 400，单文件端点由 parse_pdf 兜底返回 422。
+        """
+        from fapiao_cn.config import settings
+
+        monkeypatch.setattr(settings, "max_file_mb", 1)
+        big = b"x" * (2 * 1024 * 1024)  # 2 MB > 1 MB
+
+        single = client.post(
+            "/extract",
+            headers=auth_headers,
+            files={"file": ("big.pdf", io.BytesIO(big), "application/pdf")},
+        )
+        assert single.status_code == 422
+        assert "file_too_large" in single.json()["message"]
+
+        batch = client.post(
+            "/extract/batch",
+            headers=auth_headers,
+            files=(("files", ("big.pdf", io.BytesIO(big), "application/pdf")),),
+        )
+        assert batch.status_code == 400
+        assert "File too large" in batch.json()["detail"]
+
+    def test_file_within_single_limit_passes_gate(self, monkeypatch, auth_headers):
+        """闸门只拦超限文件：未超过 FC_MAX_FILE_MB 的文件必须能进解析流程。
+
+        与 test_single_file_limit_shared_with_extract 互为反向断言，
+        防止把上限写死或写错（例如误用 max_batch_total_mb 之类）。
+        """
+        from fapiao_cn.config import settings
+
+        monkeypatch.setattr(settings, "max_file_mb", 1)
+        payload = b"x" * (512 * 1024)  # 0.5 MB < 1 MB
+        data = (
+            ("files", ("ok.pdf", io.BytesIO(payload), "application/pdf")),
+        )
+        resp = client.post("/extract/batch", headers=auth_headers, files=data)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert len(body) == 1
+        # 内容不是 PDF，解析失败只体现在这一项，整批未被闸门拒绝
+        assert body[0]["message"].startswith("error:")
+        assert "file_too_large" not in body[0]["message"]
 
     def test_total_size_too_large(self, monkeypatch, auth_headers):
         """Total size > max_batch_total_mb should return 400."""

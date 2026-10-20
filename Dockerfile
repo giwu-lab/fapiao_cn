@@ -1,30 +1,26 @@
 # syntax=docker/dockerfile:1.7
 # ── Stage 1: builder ────────────────────────────────────────────────
+# 完全离线构建：主机侧先把所有依赖 wheel 准备好到 ./wheels/（含构建依赖 hatchling），
+# 见 README「离线构建」一节。本镜像不联网装 pip 包，绕开 BuildKit sandbox
+# 在受限环境下 DNS / 网络隔离的问题。
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
+# 构建前置：./wheels/ 由主机 `pip wheel --wheel-dir=wheels <deps>` 准备好
+COPY wheels /wheels
+
+# 离线安装构建依赖（hatchling 等）
+RUN pip install --no-cache-dir --no-index --find-links=/wheels hatchling
+
 # H45: split dependency layer from source layer so changes to src/
 # don't invalidate the (large) pip download cache.
 COPY pyproject.toml README.md ./
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels .
+RUN pip wheel --no-cache-dir --no-deps --no-index --find-links=/wheels --wheel-dir=/wheels .
 
 # Now copy src/ separately and rebuild the project wheel.
 COPY src ./src
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels .
-
-# 预先下载所有运行时依赖 wheel（国内 PyPI 镜像；传 --build-arg PIP_INDEX_URL= 关闭）
-ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-RUN if [ -n "$PIP_INDEX_URL" ]; then \
-      pip download --no-cache-dir \
-        --index-url "$PIP_INDEX_URL" \
-        --dest /wheels \
-        pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml defusedxml; \
-    else \
-      pip download --no-cache-dir \
-        --dest /wheels \
-        pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml defusedxml; \
-    fi
+RUN pip wheel --no-cache-dir --no-deps --no-index --find-links=/wheels --wheel-dir=/wheels .
 
 # ── Stage 2: runtime ────────────────────────────────────────────────
 FROM python:3.12-slim

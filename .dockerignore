@@ -10,9 +10,11 @@ samples/
 # 构建产物
 dist/
 build/
-wheels/
 .eggs/
 *.tar.gz
+
+# 注：wheels/ 不忽略 —— 离线构建方案需要它被 COPY 进镜像。
+# 没用离线方案的用户 docker build 不会用到 wheels/（Dockerfile 不再引用）。
 
 # 工具缓存
 .pytest_cache/

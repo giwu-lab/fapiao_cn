@@ -19,11 +19,10 @@ services:
       # 性能开关
       FC_CACHE_SIZE:    "${FC_CACHE_SIZE:-128}"
       FC_BATCH_WORKERS: "${FC_BATCH_WORKERS:-4}"
-      # 文件大小
-      FC_MAX_FILE_MB:        "${FC_MAX_FILE_MB:-32}"
+      # 文件大小（单文件上限 FC_MAX_FILE_MB 对 /extract 与 /extract/batch 同时生效）
+      FC_MAX_FILE_MB:        "${FC_MAX_FILE_MB:-10}"
       FC_MAX_BATCH_FILES:    "${FC_MAX_BATCH_FILES:-50}"
       FC_MAX_BATCH_TOTAL_MB: "${FC_MAX_BATCH_TOTAL_MB:-500}"
-      FC_MAX_BATCH_SINGLE_MB: "${FC_MAX_BATCH_SINGLE_MB:-10}"
       # API 鉴权（默认开启；两值都空时回退到 dev 模式 + WARN 日志）
       FC_API_AUTH_ENABLED: "${FC_API_AUTH_ENABLED:-true}"
       FC_API_KEYS:          "${FC_API_KEYS:-}"

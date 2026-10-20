@@ -77,6 +77,14 @@ class InvoiceRecord(BaseModel):
     # 商品明细。仅 XML 全电发票填充；PDF / OFD 恒为空数组
     # （OFD 暂不解析明细，见 README）。
     items: List[InvoiceItem] = Field(default_factory=list)
+    # 消费类别（由 expense_category.classify_expense 写入；空表示未命中或总开关关闭）。
+    # 字段说明：
+    #     expense_category        —— 枚举字符串（transportation/lodging/.../other）
+    #     expense_category_label  —— 中文显示（交通/住宿/.../其他）
+    #     expense_category_source —— 命中层级："ticket" | "seller" | "item" | "code"
+    expense_category: str = ""
+    expense_category_label: str = ""
+    expense_category_source: str = ""
 
     def stripped(self) -> "InvoiceRecord":
         """Return a copy with all whitespace removed from string fields."""
@@ -88,6 +96,31 @@ class InvoiceRecord(BaseModel):
         for k, v in data.items():
             if isinstance(v, str):
                 data[k] = _WHITESPACE_RE.sub("", v)
+        return InvoiceRecord(**data)
+
+    def with_expense_category(
+        self, parser_name: str = ""
+    ) -> "InvoiceRecord":
+        """Return a copy with ``expense_category*`` fields populated.
+
+        Imports are kept local to avoid a top-level cycle (expense_category
+        imports ``InvoiceItem``).  The classifier respects the
+        ``FC_EXPENSE_CATEGORY_ENABLED`` config; when disabled the three
+        fields stay empty strings.
+        """
+
+        from fapiao_cn.config import settings
+        from fapiao_cn.expense_category import classify_expense
+
+        cat, label, source = classify_expense(
+            self,
+            parser_name=parser_name,
+            enabled=settings.expense_category_enabled,
+        )
+        data = self.model_dump()
+        data["expense_category"] = cat
+        data["expense_category_label"] = label
+        data["expense_category_source"] = source
         return InvoiceRecord(**data)
 
 
@@ -117,6 +150,10 @@ class ExtractResponse(BaseModel):
     drawer: str = ""
     # 商品明细。仅 XML 全电发票填充；PDF / OFD 恒为空数组。
     items: List[InvoiceItem] = Field(default_factory=list)
+    # 消费类别（参见 InvoiceRecord 同名字段说明）
+    expense_category: str = ""
+    expense_category_label: str = ""
+    expense_category_source: str = ""
     message: str = "success"
 
 

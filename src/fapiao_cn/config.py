@@ -23,12 +23,13 @@ class Settings(BaseSettings):
     version: str = "1.2.1"
 
     # pdfplumber does not render PDF to images; keep for future OCR fallback.
-    max_file_mb: int = 32
+    # /extract 与 /extract/batch 共用这一个上限，调大它等于同时放宽两个入口。
+    max_file_mb: int = 10
 
     # Batch extraction limits
+    # 单文件上限不在这里：/extract 与 /extract/batch 共用 max_file_mb。
     max_batch_files: int = 50          # max files per batch request
     max_batch_total_mb: int = 500      # max total size per batch request
-    max_batch_single_mb: int = 10      # max size for a single file in batch
 
     # Performance
     cache_size: int = 128              # LRU parse-result cache; 0 disables
@@ -75,6 +76,12 @@ class Settings(BaseSettings):
     # H10/H47：生产模式强制 — dev 兜底（KeyStore.disabled）默认拒绝启动。
     # 仅在显式 FC_REQUIRE_CONFIGURED_KEYS=false 时回退到 dev 模式。
     require_configured_keys: bool = True
+
+    # 消费类别分类（FC_EXPENSE_CATEGORY_ENABLED）—— 把 InvoiceRecord 归到
+    # 8 大类目（交通/住宿/餐饮/快递/通信/水费/电费/燃气/成品油）+ 兜底。
+    # false 时 expense_category/label/source 三个字段恒为空字符串，
+    # 不消耗额外计算（分类函数早返回）。
+    expense_category_enabled: bool = True
 
 
 settings = Settings()

@@ -6,6 +6,81 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **消费类别分类（`expense_category`）**: `/extract` 响应新增三个字段
+  —— `expense_category`（枚举值）、`expense_category_label`（中文显示）、
+  `expense_category_source`（命中层级）。把发票归到交通 / 住宿 / 餐饮 / 快递 /
+  通信 / 水费 / 电费 / 燃气 / 成品油 / 其他 10 个类目，便于按类目做预算统计、
+  凭证归档与报销路由。
+
+  命中层级严格优先级：**L1 票种 → L2 卖方关键词 → L3 商品明细 → L4 19 位税收
+  分类编码前缀 → 兜底**。同层冲突按规则 `priority` 数字从大到小取第一。
+
+  - `other`（其他）与 `unclassified`（未归类）**语义独立**：前者是「票种级显式
+    归类」（中央非税收入统一票据），后者是「没有规则命中」。
+  - 报关单（`/extract/customs`）不属于报销场景，分类逻辑显式跳过，三字段恒为空。
+  - 总开关 `FC_EXPENSE_CATEGORY_ENABLED`（默认 `true`）；关闭时三字段恒为空字符串，
+    且不消耗额外计算。
+
+  新增 `src/fapiao_cn/expense_category.py`（规则表）与 `tests/test_classify.py`、
+  `tests/test_extract_endpoint.py`（端到端字段贯穿断言）。
+
+- **Docker 完全离线构建**: Dockerfile 改为全程 `pip install --no-index
+  --find-links=/wheels`，构建依赖（hatchling）与运行时依赖全部由主机侧
+  `scripts/prepare_wheels.sh` 预下载到 `./wheels/`。绕开 BuildKit sandbox
+  在受限网络环境下的 DNS 隔离问题（`Temporary failure in name resolution`）。
+  `.dockerignore` 不再忽略 `wheels/`。
+
+### Changed
+- **`fapiao_cn dev` 改为后台模式**: 原先是前台阻塞运行（`uvicorn.run`），
+  现在与 `fapiao_cn start` 一致——后台启动 + PID 文件 + 端口占用预检 +
+  `start_new_session` 脱离调用方 shell，日志写入 `logs/server-dev.log`。
+  `stop` / `restart` / `status` 对 `start` 与 `dev` 两种模式行为一致。
+
+- **`fapiao_cn stop` 改为同步终止**: 先向整个进程组发 `SIGTERM`（覆盖 uvicorn
+  的 reloader 父进程 + worker 子进程），轮询等待进程真正退出（超时升级
+  `SIGKILL`），再等待监听端口释放，最后才删除 PID 文件。之前 `stop` 立即返回，
+  紧接着的 `start` 会撞上尚未释放的端口（`EADDRINUSE`）。
+  `_alive()` 额外读取 `/proc/PID/status` 识别僵尸进程，避免把已死未回收的
+  进程判为「存活」。
+
+- **单文件上限统一为 `FC_MAX_FILE_MB`，默认 10 MB**（BREAKING 配置项）:
+  `/extract/batch` 原先有独立的 `FC_MAX_BATCH_SINGLE_MB`（默认 10 MB），
+  而 `/extract` 用 `FC_MAX_FILE_MB`（默认 32 MB），导致同一份 10–32 MB 的文件
+  走单文件入口能过、走批量入口却被整批 400。现在两个端点共用
+  `FC_MAX_FILE_MB`，**默认值同时下调为 10 MB**。
+
+  逐端点的净影响：
+
+  | 端点 | 变更前 | 变更后 |
+  | --- | --- | --- |
+  | `/extract` | 32 MB | 10 MB（**收紧**） |
+  | `/extract/batch` | 10 MB | 10 MB（不变，仅换用共用开关） |
+
+  **迁移**: 之前能接收 10–32 MB 文件的调用方需要显式调大
+  `FC_MAX_FILE_MB`（`FC_MAX_FILE_MB=32` 可恢复原行为）；仍在环境变量里残留的
+  `FC_MAX_BATCH_SINGLE_MB` 会被 `extra="ignore"` 静默忽略、不再有任何作用，
+  请从 `docker-compose.yml` / `.env` 中移除。
+
+  状态码语义保持不变：批量入口超限仍在闸门处整批 400，单文件端点由
+  `parse_pdf` 兜底返回 422（`message=error: file_too_large`）。
+
+### Fixed
+- **CLI 生命周期命令在 Windows 上崩溃**: `cmd_stop` / `cmd_restart` 新增的
+  `_wait_pid_gone()` 直接调用 `os.killpg()` 与 `signal.SIGKILL`——两者都是
+  POSIX 专有，在 Windows 上分别抛 `AttributeError`（`os` 没有 `killpg` 属性）
+  和 `AttributeError`（`signal` 没有 `SIGKILL`），导致 `fapiao_cn stop`
+  直接带栈退出、反而停不掉服务（改动前用的 `os.kill(pid, SIGTERM)` 在
+  Windows 上是能正常终止进程的）。
+
+  现在新增 `_signal_process()` 统一封装：优先用进程组信号，没有进程组的
+  平台降级为单进程 `os.kill()`（Windows 上映射为 `TerminateProcess`）；
+  `SIGKILL` 常量改用 `getattr(signal, "SIGKILL", signal.SIGTERM)` 兜底。
+  POSIX 行为保持不变。
+
+  依赖进程组语义的测试用例（`os.killpg` / 子进程 `SIGTERM` handler）
+  在 Windows 上标记为跳过，Windows 的进程管理仍走 `scripts/start-win.ps1`。
+
 ## [1.2.1] - 2026-10-04
 
 ### Fixed

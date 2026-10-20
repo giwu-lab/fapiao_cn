@@ -1,0 +1,154 @@
+"""End-to-end tests for the ``/extract`` HTTP endpoint.
+
+The HTTP layer adds a thin wrapper around ``formats.parse_pdf`` (PDF / XML /
+OFD auto-detection).  These tests assert that every ``InvoiceRecord`` field
+made it through to the wire response — in particular the
+``expense_category`` family, which is added by ``expense_category.classify_expense``
+and must survive the field-by-field copy in ``formats._build_response`` /
+``_parse_xml`` / ``_parse_ofd``.
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+from fastapi.testclient import TestClient
+
+from fapiao_cn.server import app
+
+client = TestClient(app)
+
+_TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "samples")
+
+
+def _load(name: str) -> bytes:
+    with open(os.path.join(_TEST_DIR, name), "rb") as f:
+        return f.read()
+
+
+class TestExtractExpenseCategoryWired:
+    """``expense_category`` 字段必须贯穿到 ``/extract`` 响应里。"""
+
+    @pytest.mark.parametrize(
+        "sample_path, expected_cat, expected_source",
+        [
+            # PDF 路径 → formats._build_response 必须传递字段
+            ("新电子发票-标准/购_滴滴_01.pdf", "transportation", "seller"),
+            ("新电子发票-标准/购_顺丰_01.pdf", "courier", "seller"),
+            ("新电子发票-标准/购_通信_01.pdf", "telecom", "seller"),
+            ("新电子发票-标准/购_自来水_01.pdf", "water", "seller"),
+            ("新电子发票-标准/购_油品_02.pdf", "fuel", "seller"),
+            ("新电子发票-标准/购_餐饮_01.pdf", "dining", "seller"),
+            ("航空运输电子客票/航_运输_01.pdf", "transportation", "ticket"),
+            ("铁路电子客票/火车票01.pdf", "transportation", "ticket"),
+            ("成品油合并代码/购_油品_01.pdf", "fuel", "ticket"),
+            # XML 路径 → formats._parse_xml 必须传递字段
+            ("全电发票-XML/购_油品_01.xml", "fuel", "seller"),
+            ("全电发票-XML/购_油品_02.xml", "fuel", "seller"),
+            ("全电发票-XML/购_零售_01.xml", "dining", "item"),
+        ],
+    )
+    def test_extract_response_carries_expense_category(
+        self, auth_headers, sample_path, expected_cat, expected_source
+    ):
+        from fapiao_cn.config import settings
+
+        settings.expense_category_enabled = True
+        contents = _load(sample_path)
+        resp = client.post(
+            "/extract",
+            headers=auth_headers,
+            files={"file": (os.path.basename(sample_path), contents)},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body.get("expense_category") == expected_cat, (
+            f"{sample_path}: got {body.get('expense_category')!r}"
+        )
+        assert body.get("expense_category_source") == expected_source, (
+            f"{sample_path}: source={body.get('expense_category_source')!r}"
+        )
+        # label 应当等于 CATEGORIES[cat]
+        from fapiao_cn.expense_category import CATEGORIES
+
+        assert body.get("expense_category_label") == CATEGORIES[expected_cat]
+
+    @pytest.mark.parametrize(
+        "sample_path",
+        [
+            "报关单/L20260528000009_21708433876_报关单放行条合并文档(1).pdf",
+            "报关单/L20260625000008_0522.pdf",
+        ],
+    )
+    def test_extract_customs_skips_classification(
+        self, auth_headers, sample_path
+    ):
+        """``/extract/customs`` 路径返回的是 CustomsDeclarationHeader 不是
+        ExtractResponse；``/extract`` 误喂报关单会被识别为无法解析，
+        走 message=success 但分类保持空字符串。"""
+        from fapiao_cn.config import settings
+
+        settings.expense_category_enabled = True
+        contents = _load(sample_path)
+        resp = client.post(
+            "/extract",
+            headers=auth_headers,
+            files={"file": (os.path.basename(sample_path), contents)},
+        )
+        # 报关单走 /extract 时通常 message 含 error; 不是关键路径但
+        # 若意外归到 /extract 路径也不应把报关单分到具体消费类目
+        if resp.status_code == 200:
+            body = resp.json()
+            assert body.get("expense_category", "") == ""
+            assert body.get("expense_category_source", "") == ""
+
+    def test_extract_response_disabled_flag(self, auth_headers):
+        """``FC_EXPENSE_CATEGORY_ENABLED=false`` 时响应里三字段必须为空字符串。
+
+        用 `reset_cache_for_tests(0)` 临时禁用 LRU，避免前一个 enabled 测试
+        缓存的响应影响断言（同一个 PDF bytes + filename 会命中缓存）。
+        """
+        from fapiao_cn.cache import reset_cache_for_tests
+        from fapiao_cn.config import settings
+
+        settings.expense_category_enabled = False
+        reset_cache_for_tests(0)
+        try:
+            contents = _load("新电子发票-标准/购_滴滴_01.pdf")
+            resp = client.post(
+                "/extract",
+                headers=auth_headers,
+                files={"file": ("购_滴滴_01.pdf", contents)},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body.get("expense_category") == ""
+            assert body.get("expense_category_label") == ""
+            assert body.get("expense_category_source") == ""
+        finally:
+            settings.expense_category_enabled = True
+            reset_cache_for_tests(128)
+
+
+class TestExtractCustomsEndpointClassify:
+    """``/extract/customs`` 不应触发 expense_category 分类逻辑。"""
+
+    def test_customs_endpoint_skips_expense_category(self, auth_headers):
+        from fapiao_cn.config import settings
+
+        settings.expense_category_enabled = True
+        contents = _load(
+            "报关单/L20260528000009_21708433876_报关单放行条合并文档(1).pdf"
+        )
+        resp = client.post(
+            "/extract/customs",
+            headers=auth_headers,
+            files={"file": ("bgd.pdf", contents)},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # CustomsDeclarationHeader 没有 expense_category 字段；
+        # 这一项作为不变量检查（如果 schema 误把 expense_category 加到
+        # CustomsDeclarationHeader，应让用户知道走 /extract 而不是 /extract/customs）
+        assert "expense_category" not in body

@@ -275,4 +275,4 @@ def extract_invoice_from_root(root: DET.Element) -> Optional[InvoiceRecord]:
         reviewer=_text(basic_info, "Reviewer"),
         drawer=_text(basic_info, "Drawer"),
         items=items,
-    ).stripped()
+    ).stripped().with_expense_category()

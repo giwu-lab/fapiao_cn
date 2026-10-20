@@ -1126,3 +1126,137 @@ Page 1 of 1 打印日期：2026-05-26
         assert all(
             "摩托车发动机" in (it.name_and_spec or "") or it.hs_code for it in rec.items
         )
+
+
+class TestExpenseCategorySamples:
+    """消费类别分类：基于 samples/ 目录下的真实样本断言 ``expense_category``。
+
+    期望值与样本文件命名约定（``购_滴滴_01`` / ``购_餐饮_XX`` / ``购_顺丰_01`` /
+    ...）以及实际卖方/明细语义同步制定。每个 case 都会跑一次完整解析，校验
+    ``expense_category`` / ``expense_category_source`` 两个字段。
+    """
+
+    @pytest.mark.parametrize(
+        "sample_path, expected_cat, expected_source",
+        [
+            # ── L1 票种命中 ──
+            ("航空运输电子客票/航_运输_01.pdf", "transportation", "ticket"),
+            ("航空运输电子客票/航_运输_02.pdf", "transportation", "ticket"),
+            ("铁路电子客票/火车票01.pdf", "transportation", "ticket"),
+            ("铁路电子客票/火车票02.pdf", "transportation", "ticket"),
+            ("成品油合并代码/购_油品_01.pdf", "fuel", "ticket"),
+            ("成品油合并代码/购_油品_03.pdf", "fuel", "ticket"),
+            ("中央非税收入统一票据/专利_01.pdf", "other", "ticket"),
+            # ── L2 卖方命中（PDF 没 items，靠 seller 命中） ──
+            ("新电子发票-标准/购_滴滴_01.pdf", "transportation", "seller"),
+            ("新电子发票-标准/购_滴滴_02.pdf", "transportation", "seller"),
+            ("新电子发票-标准/购_顺丰_01.pdf", "courier", "seller"),
+            ("新电子发票-标准/购_通信_01.pdf", "telecom", "seller"),
+            ("新电子发票-标准/购_自来水_01.pdf", "water", "seller"),
+            ("新电子发票-标准/购_油品_02.pdf", "fuel", "seller"),
+            ("新电子发票-标准/购_餐饮_01.pdf", "dining", "seller"),
+            ("新电子发票-标准/购_餐饮_02.pdf", "dining", "seller"),
+            # ── L2 卖方命中（XML 也能从 seller 命中） ──
+            ("全电发票-XML/购_油品_01.xml", "fuel", "seller"),
+            ("全电发票-XML/购_油品_02.xml", "fuel", "seller"),
+            # ── L3 明细命中（XML 有 items；明细里的 *餐饮服务* 触发 dining） ──
+            ("全电发票-XML/购_零售_01.xml", "dining", "item"),
+        ],
+    )
+    def test_sample_classified_correctly(self, sample_path, expected_cat, expected_source):
+        from pathlib import Path
+
+        from fapiao_cn.config import settings
+
+        settings.expense_category_enabled = True
+        path = Path("samples") / sample_path
+        assert path.exists(), f"sample not found: {path}"
+        contents = path.read_bytes()
+
+        if path.suffix == ".xml":
+            from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
+
+            rec = parse_xml_invoice(contents)
+        else:
+            from fapiao_cn.pipeline import run
+
+            result = run(contents)
+            rec = result.record
+
+        assert rec is not None, f"parse failed: {sample_path}"
+        assert rec.expense_category == expected_cat, (
+            f"{sample_path}: expected {expected_cat}, got {rec.expense_category} "
+            f"(seller={rec.seller_name!r}, items={[i.category for i in rec.items]!r})"
+        )
+        assert rec.expense_category_source == expected_source, (
+            f"{sample_path}: expected source={expected_source}, got {rec.expense_category_source}"
+        )
+        # label 应当与 category 对应（CATEGORIES 表里的值）
+        from fapiao_cn.expense_category import CATEGORIES
+
+        if rec.expense_category:
+            assert rec.expense_category_label == CATEGORIES[rec.expense_category], sample_path
+
+    def test_disabled_flag_yields_empty_category(self):
+        """FC_EXPENSE_CATEGORY_ENABLED=false 时三字段必须为空字符串。"""
+        from pathlib import Path
+
+        from fapiao_cn.config import settings
+        from fapiao_cn.pipeline import run
+
+        settings.expense_category_enabled = False
+        path = Path("samples/新电子发票-标准/购_滴滴_01.pdf")
+        rec = run(path.read_bytes()).record
+        assert rec.expense_category == ""
+        assert rec.expense_category_label == ""
+        assert rec.expense_category_source == ""
+        settings.expense_category_enabled = True  # 恢复
+
+    def test_with_expense_category_method_returns_new_instance(self):
+        """InvoiceRecord.with_expense_category() 返回新实例（不可变风格）。"""
+        from fapiao_cn.schemas import InvoiceRecord
+
+        base = InvoiceRecord(seller_name="滴滴出行", invoice_number="X")
+        updated = base.with_expense_category(parser_name="new")
+        assert base.expense_category == ""  # 原始不变
+        assert updated.expense_category == "transportation"  # 新实例填充
+        assert updated.invoice_number == "X"  # 其他字段保留
+
+    @pytest.mark.parametrize(
+        "sample_path",
+        [
+            "报关单/L20260528000009_21708433876_报关单放行条合并文档(1).pdf",
+            "报关单/L20260602000010_0429.pdf",
+            "报关单/L20260625000008_0522.pdf",
+            "报关单/L20260626000009_BGD_SNKO020260509798.pdf",
+            "报关单/L20260901000001_SHSL60355800_bgd.pdf",
+        ],
+    )
+    def test_customs_declaration_skips_classification(self, sample_path):
+        """报关单不参与消费类别分类：即便卖方偶然含「运输」/「餐饮」等关键词，三字段保持空字符串。"""
+        from pathlib import Path
+
+        from fapiao_cn.config import settings
+        from fapiao_cn.pipeline import run
+
+        settings.expense_category_enabled = True
+        path = Path("samples") / sample_path
+        assert path.exists(), f"sample not found: {path}"
+        result = run(path.read_bytes())
+        rec = result.record
+        assert rec.expense_category == "", sample_path
+        assert rec.expense_category_label == "", sample_path
+        assert rec.expense_category_source == "", sample_path
+
+    def test_customs_declaration_skipped_even_if_seller_has_keywords(self):
+        """报关单即使在 L2 关键词命中场景下也必须跳过分类。"""
+        from fapiao_cn.schemas import InvoiceRecord
+
+        rec = InvoiceRecord(
+            seller_name="某滴滴出行科技有限公司",
+            invoice_number="CUSTOMS_X",
+            items=[],
+        )
+        updated = rec.with_expense_category(parser_name="customs_declaration")
+        assert updated.expense_category == ""
+        assert updated.expense_category_source == ""

@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, List, Optional
 
 import pdfplumber
 
+from fapiao_cn.config import settings
+from fapiao_cn.expense_category import classify_expense
 from fapiao_cn.parsers import dispatch
 from fapiao_cn.parsers.customs_declaration import parse_customs_declaration
 from fapiao_cn.schemas import CustomsDeclarationHeader, InvoiceRecord, PdfRaw
@@ -145,6 +147,16 @@ def run(contents: bytes, *, with_raw: bool = False) -> ParseResult:
     ]
 
     record = _aggregate(per_page_records, file_label="", page_count=len(pages))
+    # 消费类别分类：默认按 FC_EXPENSE_CATEGORY_ENABLED 控制；分类规则
+    # 会按 L1 票种 → L2 卖方关键词 → L3 明细 → L4 税收编码 命中。
+    cat, label, source = classify_expense(
+        record,
+        parser_name=parser_name,
+        enabled=settings.expense_category_enabled,
+    )
+    record.expense_category = cat
+    record.expense_category_label = label
+    record.expense_category_source = source
 
     pdf_raw = PdfRaw()
     if with_raw:
