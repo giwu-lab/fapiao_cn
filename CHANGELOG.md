@@ -66,6 +66,19 @@ adheres to [Semantic Versioning](https://semver.org/).
   `parse_pdf` 兜底返回 422（`message=error: file_too_large`）。
 
 ### Fixed
+- **容器日志丢失 `fapiao_cn.*` 的 INFO 消息**: `deploy/log_config.yaml` 只配了
+  `uvicorn.error` / `uvicorn.access` / `fapiao_cn.audit` 三个 logger，
+  `fapiao_cn.server` / `fapiao_cn.auth` 的 INFO 记录向上 propagate 到 root，
+  而 root 没有任何 handler —— Python 的 lastResort 只处理 WARNING 及以上，
+  于是所有 INFO 级别诊断被**静默丢弃**。
+
+  实际影响：运维在容器日志里看不到「loaded N API keys from ...（structured mode）」
+  这类启动确认，也看不到 SIGHUP 热加载后的「reloaded N API keys」，
+  无法判断密钥库到底有没有加载成功。
+
+  现在补上 `fapiao_cn` logger（level INFO → default handler → stderr）。
+  `fapiao_cn.audit` 自带 handler 且 `propagate: false`，不会被重复输出到 stdout。
+
 - **CLI 生命周期命令在 Windows 上崩溃**: `cmd_stop` / `cmd_restart` 新增的
   `_wait_pid_gone()` 直接调用 `os.killpg()` 与 `signal.SIGKILL`——两者都是
   POSIX 专有，在 Windows 上分别抛 `AttributeError`（`os` 没有 `killpg` 属性）

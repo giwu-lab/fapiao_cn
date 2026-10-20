@@ -42,3 +42,13 @@ loggers:
     level: INFO
     handlers: [audit_file]
     propagate: false
+  # fapiao_cn.server / fapiao_cn.auth 的 INFO 消息（密钥库加载确认、
+  # SIGHUP 热加载确认等）此前没有任何 handler：它们向上 propagate 到
+  # root，而 root 也没有 handler，于是 Python 的 lastResort 只处理
+  # WARNING 以上的级别 —— 所有 INFO 级别的诊断信息被静默丢弃，
+  # 运维在容器日志里看不到「已加载 N 把 API key」这类启动确认。
+  # fapiao_cn.audit 自己有 handler 且 propagate=false，不会重复输出。
+  fapiao_cn:
+    level: INFO
+    handlers: [default]
+    propagate: false
