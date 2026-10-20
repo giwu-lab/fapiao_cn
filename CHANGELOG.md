@@ -120,6 +120,14 @@ adheres to [Semantic Versioning](https://semver.org/).
 - **`fapiao_cn dev --help` 仍写「foreground」**: `cmd_dev` 早已改成后台
   模式，docstring 和 README 都更新过，只有参数帮助文案漏了。
 
+- **`deploy/log_config.yaml` 必须保持纯 ASCII**: uvicorn 用 `yaml.safe_load()` 读它，
+  而文件是按**系统 locale 编码**打开的 —— 中文 Windows（GBK）上任何非 ASCII
+  字节都会让配置加载失败，服务在起得来之前就死于
+  `UnicodeDecodeError: 'gbk' codec can't decode byte 0x84`。
+  本仓库的 `log_config.yaml` 之前只有英文注释；新增 `fapiao_cn` logger 时若
+  顺手写成中文，会让 `fapiao_cn start` / `dev` 在 Windows 上完全起不来。
+  文件里已加注说明，保持 ASCII。
+
 - **容器日志丢失 `fapiao_cn.*` 的 INFO 消息**: `deploy/log_config.yaml` 只配了
   `uvicorn.error` / `uvicorn.access` / `fapiao_cn.audit` 三个 logger，
   `fapiao_cn.server` / `fapiao_cn.auth` 的 INFO 记录向上 propagate 到 root，
