@@ -1,26 +1,56 @@
 # syntax=docker/dockerfile:1.7
 # ── Stage 1: builder ────────────────────────────────────────────────
-# 完全离线构建：主机侧先把所有依赖 wheel 准备好到 ./wheels/（含构建依赖 hatchling），
-# 见 README「离线构建」一节。本镜像不联网装 pip 包，绕开 BuildKit sandbox
-# 在受限环境下 DNS / 网络隔离的问题。
+# 依赖有两条来路，产出同样的镜像：
+#   离线 —— 主机侧 `bash scripts/prepare_wheels.sh` 把 wheel 预置到 ./wheels/，
+#           构建期 `pip --no-index --find-links=/wheels` 全程不联网，绕开
+#           BuildKit sandbox 在受限网络里的 DNS 隔离问题；
+#   在线 —— 没有预置 wheel 时，构建期从镜像源下载（CI / 全新克隆走这条，
+#           不需要任何前置步骤）。
+# 是否离线由 /wheels 里有没有 .whl 决定；wheels/.gitkeep 是受版本控制的
+# 占位文件，保证全新克隆里 `COPY wheels /wheels` 也成立。
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# 构建前置：./wheels/ 由主机 `pip wheel --wheel-dir=wheels <deps>` 准备好
 COPY wheels /wheels
 
-# 离线安装构建依赖（hatchling 等）
-RUN pip install --no-cache-dir --no-index --find-links=/wheels hatchling
+# 可选：切换 pip 镜像源（默认阿里云）。传 --build-arg PIP_INDEX_URL= 走官方源。
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+
+# 一次完成：装好构建依赖（hatchling），并把运行时依赖 wheel 备齐到 /wheels。
+RUN set -eu; \
+    if ls /wheels/*.whl >/dev/null 2>&1; then \
+        echo ">>> offline mode: using prebuilt wheels in /wheels"; \
+        PIP_ARGS="--no-index --find-links=/wheels"; \
+    else \
+        echo ">>> online mode: downloading runtime deps from ${PIP_INDEX_URL}"; \
+        PIP_ARGS="--index-url ${PIP_INDEX_URL}"; \
+    fi; \
+    pip install --no-cache-dir ${PIP_ARGS} hatchling; \
+    if ! ls /wheels/*.whl >/dev/null 2>&1; then \
+        pip download --no-cache-dir ${PIP_ARGS} --dest /wheels \
+            pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings \
+            python-multipart httpx pyyaml defusedxml; \
+    fi
 
 # H45: split dependency layer from source layer so changes to src/
 # don't invalidate the (large) pip download cache.
 COPY pyproject.toml README.md ./
-RUN pip wheel --no-cache-dir --no-deps --no-index --find-links=/wheels --wheel-dir=/wheels .
+RUN set -eu; \
+    if ls /wheels/*.whl >/dev/null 2>&1; then \
+        pip wheel --no-cache-dir --no-deps --no-index --find-links=/wheels --wheel-dir=/wheels .; \
+    else \
+        pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels .; \
+    fi
 
 # Now copy src/ separately and rebuild the project wheel.
 COPY src ./src
-RUN pip wheel --no-cache-dir --no-deps --no-index --find-links=/wheels --wheel-dir=/wheels .
+RUN set -eu; \
+    if ls /wheels/*.whl >/dev/null 2>&1; then \
+        pip wheel --no-cache-dir --no-deps --no-index --find-links=/wheels --wheel-dir=/wheels .; \
+    else \
+        pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels .; \
+    fi
 
 # ── Stage 2: runtime ────────────────────────────────────────────────
 FROM python:3.12-slim
@@ -52,10 +82,12 @@ WORKDIR /app
 COPY --from=builder /wheels /wheels
 
 # 装运行时依赖 + 项目本体（本地 wheel，不联网）
+# /wheels 里的依赖在离线模式来自主机预置、在在线模式来自 builder 的
+# pip download —— 两条路到这里都已经是 wheel，所以这里恒为离线安装。
 RUN pip install --no-cache-dir --no-index --find-links=/wheels \
         pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml defusedxml \
- && pip install --no-cache-dir --no-index --no-deps --find-links=/wheels fapiao_cn \
- && rm -rf /wheels
+    && pip install --no-cache-dir --no-index --no-deps --find-links=/wheels fapiao_cn \
+    && rm -rf /wheels
 
 ENV FC_HOST=0.0.0.0 \
     FC_PORT=8091 \

@@ -23,8 +23,9 @@ env/
 # 本地密钥文件（操作者自建的 API key 存储；与 .env 同等对待）
 keys.json
 
-# 注：wheels/ 不忽略 —— 离线构建方案需要它被 COPY 进镜像。
-# 没用离线方案的用户 docker build 不会用到 wheels/（Dockerfile 不再引用）。
+# 注：wheels/ 不忽略 —— Dockerfile 第 11 行的 `COPY wheels /wheels` 需要它
+# （wheels/.gitkeep 是受版本控制的占位文件，保证全新克隆里这个 COPY 也成立）。
+# wheels/ 里没有 .whl 时，Dockerfile 会自动回退到构建期在线下载依赖。
 
 # 工具缓存
 .pytest_cache/

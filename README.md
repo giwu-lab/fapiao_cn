@@ -17,10 +17,17 @@ docker build --build-arg APT_MIRROR= -t fapiao_cn:1.0.0 .
 
 ### 构建方案
 
-**方案 A：默认在线构建（最常用）**—— `apt-get` 走国内镜像，pip 离线（构建依赖 + 运行时依赖全部预先 wheel 到 `./wheels/`，构建时 `pip install --no-index --find-links=/wheels`）：
+依赖有两条来路，产出同样的镜像：
+
+| | `wheels/` 里有 `.whl` | `wheels/` 为空（全新克隆 / CI） |
+| --- | --- | --- |
+| 构建期 pip | `--no-index --find-links=/wheels`（**全程不联网**） | 从镜像源在线下载 |
+| 前置步骤 | 先跑 `scripts/prepare_wheels.sh` | 无 |
+
+Dockerfile 会自动判断走哪条，**两条路都不需要改 Dockerfile**：
 
 ```bash
-# 一次性：主机侧准备 wheels（含构建依赖 hatchling + 运行时依赖）
+# 路线 1（离线，推荐给受限网络）：一次性准备 wheels
 bash scripts/prepare_wheels.sh           # 等价于 pip wheel --wheel-dir=wheels <deps>
 # 或指定 PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ bash scripts/prepare_wheels.sh
 
@@ -28,15 +35,16 @@ docker build -t fapiao_cn:1.0.0 .
 ```
 
 > wheels/ 不用每次都重生成；只有锁定依赖版本时才需要重跑。脚本会自动用 `.venv/bin/python3`（如有）或系统 `python3`。
+> `wheels/` 里的 wheel 本体不入库（`.gitignore`），只保留 `wheels/.gitkeep` 占位，保证全新克隆里 `COPY wheels /wheels` 依然成立。
 
-**方案 B：buildx sandbox 受限网络** —— BuildKit 默认把 RUN 步骤网络隔离，受限环境里 DNS 仍 `Temporary failure in name resolution`（即便镜像源配对了也不行）。共享主机网络栈：
+**受限网络（buildx sandbox）** —— BuildKit 默认把 RUN 步骤网络隔离，受限环境里 DNS 仍 `Temporary failure in name resolution`（即便镜像源配对了也不行）。此时用离线路线（路线 1）即可彻底绕开；也可以共享主机网络栈：
 
 ```bash
 docker buildx create --use --driver docker-container --network host   # 一次性建 host 网络 builder
 docker buildx build -t fapiao_cn:1.0.0 .                               # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
 ```
 
-**方案 C：完全离线**（方案 A 失败 + 方案 B 也没法用时）—— 在主机上准备好 wheels **和** 基础 deb 包（apt-offline 工具链），用本地 deb 仓库喂给镜像。绝大多数情况下方案 A + B 已够用，此处不展开。
+**方案 C：完全离线**（路线 1 失败 + 上面共享网络也没法用时）—— 在主机上准备好 wheels **和** 基础 deb 包（apt-offline 工具链），用本地 deb 仓库喂给镜像。绝大多数情况下路线 1 + 共享网络已够用，此处不展开。
 
 ### 生产
 
@@ -91,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-win.ps1 `
 
 #### `logs/` 目录约定
 
-`logs/` 下只会出现以下 4 类文件，**除此以外**的 `server-*.log` 都是历史临时副产物，可以删除：
+`logs/` 下只会出现以下 5 类文件，**除此以外**的 `server-*.log` 都是历史临时副产物，可以删除：
 
 | 文件 | 来源 |
 | --- | --- |
@@ -99,6 +107,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-win.ps1 `
 | `logs/server-dev.log` | `fapiao_cn dev` 写的 uvicorn 日志（带 `--reload`） |
 | `logs/audit.log` | 受保护请求审计日志（10 MiB × 5 自动轮转） |
 | `logs/fapiao_cn.pid` | `start` / `dev` 写的进程 PID；`stop` / `restart` / `status` 读它 |
+| `logs/fapiao_cn.endpoint` | `start` / `dev` 写的实际绑定端点 `host:port`；`stop` / `restart` 据此等待端口释放 |
+
+> `start --port 9000` 之后，`FC_PORT` / `settings.port` 里的默认值并不是真正占用的端口。端点文件就是为了让 `stop` / `restart` 等到**真正被占用**的那个 socket 被释放。命令行 `--host` / `--port` 优先级高于该文件。
 
 `fapiao_cn-server`（前台 console_script）和裸 `python -m uvicorn ...`（裸前台）都不重定向 stdout，**不会写日志文件**——它们的输出直接到调用方 shell 的 stderr。
 
@@ -255,6 +266,8 @@ HTTP 422 响应体就是 `ExtractResponse` / `PdfRaw`，错误字符串完整保
 > 报关单（`/extract/customs`）不属于企业报销场景，分类逻辑显式跳过该票种——即使卖方碰巧含「运输」「餐饮」等关键词，分类三字段也保持空字符串（与 `unclassified` 不同）。
 
 > PDF 票面的 `items[]` 恒为空，所以 PDF 走 `seller` 路径（依赖卖方关键词）；XML 全电发票因有明细，`item` / `code` 也参与判定，**同一份内容（PDF 转 XML）可能归到不同细分类**——例如「购_零售_01」XML 因明细含「*餐饮服务*」被归到 `dining`，PDF 因无明细落到兜底空。
+>
+> OFD 全电票与 PDF 一样走 `seller` 路径（OFD 暂不解析明细），三条路径（PDF / XML / OFD）都会产出类目，不会出现「某个格式恒为空」的情况。
 
 ## API 鉴权
 

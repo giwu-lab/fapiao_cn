@@ -1204,13 +1204,17 @@ class TestExpenseCategorySamples:
         from fapiao_cn.config import settings
         from fapiao_cn.pipeline import run
 
-        settings.expense_category_enabled = False
         path = Path("samples/新电子发票-标准/购_滴滴_01.pdf")
-        rec = run(path.read_bytes()).record
-        assert rec.expense_category == ""
-        assert rec.expense_category_label == ""
-        assert rec.expense_category_source == ""
-        settings.expense_category_enabled = True  # 恢复
+        # try/finally: 断言失败时也必须把全局开关复位，否则会以 False
+        # 泄漏到后续用例（test_pipeline.py 排在 test_parsers.py 之后）。
+        settings.expense_category_enabled = False
+        try:
+            rec = run(path.read_bytes()).record
+            assert rec.expense_category == ""
+            assert rec.expense_category_label == ""
+            assert rec.expense_category_source == ""
+        finally:
+            settings.expense_category_enabled = True
 
     def test_with_expense_category_method_returns_new_instance(self):
         """InvoiceRecord.with_expense_category() 返回新实例（不可变风格）。"""
@@ -1221,6 +1225,46 @@ class TestExpenseCategorySamples:
         assert base.expense_category == ""  # 原始不变
         assert updated.expense_category == "transportation"  # 新实例填充
         assert updated.invoice_number == "X"  # 其他字段保留
+
+    def test_ofd_invoice_is_classified(self):
+        """OFD 全电票也必须产出消费类别（此前只有 PDF / XML 两条路径分类）。
+
+        卖方是「重庆福烤餐饮服务有限公司」→ 餐饮 / seller；OFD 与 PDF / XML
+        的差异不应该体现在类目字段上。
+        """
+        from pathlib import Path
+
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        path = Path("samples/全电发票-OFD/烤匠电子发票_332.60元_龚健武.ofd")
+        if not path.exists():
+            pytest.skip("OFD sample not available")
+        rec = parse_ofd_invoice(path.read_bytes())
+        assert rec is not None
+        assert rec.seller_name == "重庆福烤餐饮服务有限公司"
+        assert rec.expense_category == "dining"
+        assert rec.expense_category_label == "餐饮"
+        assert rec.expense_category_source == "seller"
+
+    def test_ofd_classification_respects_disabled_flag(self):
+        """总开关关闭时 OFD 的三字段同样必须为空字符串。"""
+        from pathlib import Path
+
+        from fapiao_cn.config import settings
+        from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
+
+        path = Path("samples/全电发票-OFD/烤匠电子发票_332.60元_龚健武.ofd")
+        if not path.exists():
+            pytest.skip("OFD sample not available")
+        settings.expense_category_enabled = False
+        try:
+            rec = parse_ofd_invoice(path.read_bytes())
+            assert rec is not None
+            assert rec.expense_category == ""
+            assert rec.expense_category_label == ""
+            assert rec.expense_category_source == ""
+        finally:
+            settings.expense_category_enabled = True
 
     @pytest.mark.parametrize(
         "sample_path",

@@ -66,6 +66,57 @@ adheres to [Semantic Versioning](https://semver.org/).
   `parse_pdf` 兜底返回 422（`message=error: file_too_large`）。
 
 ### Fixed
+- **全新克隆 / CI 的 `docker build` 必然失败**: Dockerfile 改成完全离线构建后
+  第 11 行 `COPY wheels /wheels` 依赖一个**被 .gitignore 排除**的目录，
+  仓库里并不存在它 —— 干净检出（含 `.github/workflows/ci.yml` 的
+  `docker build -t fapiao_cn:ci .`）一律在第 3 步报
+  `failed to calculate checksum ... "/wheels": not found`。
+  `docker compose up -d`（compose 里 `build: {context: .}`）同样受影响。
+
+  现在 Dockerfile 会自动判断：`wheels/` 里有 `.whl` 就走离线
+  （`--no-index --find-links=/wheels`，全程不联网），否则回退到构建期从
+  镜像源在线下载。两条路产出同样的镜像，**都不需要改 Dockerfile**。
+
+  配套：`wheels/.gitkeep` 入库（`.gitignore` 从 `wheels/` 改为
+  `wheels/*` + `!wheels/.gitkeep`），保证全新克隆里 `COPY wheels /wheels`
+  依然成立；`.dockerignore` 里那条「Dockerfile 不再引用 wheels/」的错误
+  注释已更正。
+
+- **OFD 全电票从不被分类**: 消费类别分类此前只接在两条路径上
+  （`pipeline.run` 的 PDF、`parsers/xml_invoice.py` 的 XML），
+  `parsers/ofd_invoice.py` 从不调用 `with_expense_category()`，
+  而 `formats._parse_ofd` 却照抄这三个字段 —— 于是 OFD 发票的
+  `expense_category` 恒为空串，而空串与「报关单跳过」「开关关闭」
+  这两种语义无法区分。现在 OFD 与 PDF / XML 行为一致。
+
+- **`fapiao_cn stop` 等的不是真正占用的端口**: `start` / `dev` 可以用
+  `--host` / `--port` 绑到与 `FC_PORT` / `settings.port` 不同的端口，
+  但 `stop` 只能从环境变量猜端口，于是「等端口释放」这件事发生在错误的
+  socket 上 —— `start --port 9000` 之后的 EADDRINUSE 竞态原样存在。
+
+  现在 `start` / `dev` 把实际绑定的 `host:port` 落到
+  `logs/fapiao_cn.endpoint`，`stop` / `restart` 优先读它；
+  `stop` 也接受 `--host` / `--port` 覆盖。`restart` 会在**原端口**上重启。
+
+- **`stop` 可能误杀无关进程组**: PID 文件是纯文本，可能比它指向的进程
+  活得久；PID 被系统回收给别的程序后，`os.killpg` 会连带干掉一个毫不
+  相干的进程组（改动前只是杀单个进程）。现在发信号前先读
+  `/proc/<pid>/cmdline` 确认它确实是 uvicorn，否则拒绝发信号并返回 1。
+  没有 `/proc` 的平台（Windows / macOS）保持原行为。
+
+- **规则表 tie-break 与文档不符**: 跨类目比较时用的是**类目内**下标，
+  而文档承诺「priority 相同时按规则在表中顺序取第一」（表中顺序是所有
+  类目拼接出来的全局顺序）。当前规则表下两者结果一致，但只要有一个类目
+  新增第二条同优先级规则，选中的规则就会偏离文档。改用全局序号。
+
+- **`.env.example` 与代码脱节**: `FC_MAX_FILE_MB` 仍写着 32（新默认值是
+  10，32 恰好是「恢复旧行为」的值）；`FC_MAX_BATCH_SINGLE_MB` 仍写着 10
+  （该配置项已删除，残留值会被 `extra="ignore"` 静默忽略）；新增的
+  `FC_EXPENSE_CATEGORY_ENABLED` 则完全没写。已同步。
+
+- **`fapiao_cn dev --help` 仍写「foreground」**: `cmd_dev` 早已改成后台
+  模式，docstring 和 README 都更新过，只有参数帮助文案漏了。
+
 - **容器日志丢失 `fapiao_cn.*` 的 INFO 消息**: `deploy/log_config.yaml` 只配了
   `uvicorn.error` / `uvicorn.access` / `fapiao_cn.audit` 三个 logger，
   `fapiao_cn.server` / `fapiao_cn.auth` 的 INFO 记录向上 propagate 到 root，

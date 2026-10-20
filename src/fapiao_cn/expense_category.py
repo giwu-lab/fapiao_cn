@@ -248,28 +248,22 @@ def _hit_keywords(text: str, keywords: Iterable[str]) -> bool:
     return False
 
 
-def _match_keyword_rules(
-    text: str,
-    rules: Iterable[KeywordRule],
-) -> Optional[Tuple[str, str, str]]:
-    """在 ``text`` 上跑一组 KeywordRule，返回 ``(category, label, source)``
-    或 None（未命中）。
+def _flat_rules(
+    rules: "dict[str, List[KeywordRule]]",
+) -> List[Tuple[KeywordRule, int]]:
+    """把按类目分组的规则表摊平成一条带**全局序号**的列表。
 
-    source 固定为 ``"seller"`` 或 ``"item"``，由调用方传入。
+    全局序号是跨类目的 tie-breaker：模块文档承诺「priority 相同时按规则在
+    表中顺序取第一」，而"表中顺序"是所有类目按声明顺序拼接出来的。只用类目
+    内下标会让「先出现的类目里排在后面的规则」反过来赢过「后出现的类目里
+    排在最前面的规则」，与文档不符。
     """
 
-    best: Optional[Tuple[int, int, KeywordRule]] = None
-    for idx, rule in enumerate(rules):
-        if not _hit_keywords(text, rule.keywords):
-            continue
-        # 同 priority 时取表里先出现的（用 idx 当 tiebreaker，数字越小越优先）
-        rank = (rule.priority, -idx)
-        if best is None or rank > best[:2]:
-            best = (rule.priority, -idx, rule)
-    if best is None:
-        return None
-    _, _, rule = best
-    return (rule.category, rule.label, "")
+    flat: List[Tuple[KeywordRule, int]] = []
+    for cat_rules in rules.values():
+        for rule in cat_rules:
+            flat.append((rule, len(flat)))
+    return flat
 
 
 def _match_code_prefix(
@@ -333,16 +327,13 @@ def classify_expense(
     # L2: 卖方关键词（按 priority 跨类目比较）
     seller_text = record.seller_name or ""
     best: Optional[Tuple[int, int, KeywordRule]] = None
-    for cat_rules in rules.values():
-        for idx, rule in enumerate(cat_rules):
-            if not _hit_keywords(seller_text, rule.keywords):
-                continue
-            # 同 priority 时按 RULES 内部出现顺序（idx 小优先）。
-            # 跨类目比较：用 (priority, -global_idx) 决定胜负，global_idx
-            # 来自在所有规则里的拼接序号。
-            rank = (rule.priority, -idx)
-            if best is None or rank > best[:2]:
-                best = (rule.priority, -idx, rule)
+    for rule, gidx in _flat_rules(rules):
+        if not _hit_keywords(seller_text, rule.keywords):
+            continue
+        # 同 priority 时按规则在表中顺序取第一（全局序号 gidx 越小越优先）。
+        rank = (rule.priority, -gidx)
+        if best is None or rank > best[:2]:
+            best = (rule.priority, -gidx, rule)
     if best is not None:
         _, _, rule = best
         return (rule.category, rule.label, "seller")
@@ -360,13 +351,12 @@ def classify_expense(
         item_text = " ".join(item_text_parts)
         if item_text:
             best = None
-            for cat_rules in rules.values():
-                for idx, rule in enumerate(cat_rules):
-                    if not _hit_keywords(item_text, rule.keywords):
-                        continue
-                    rank = (rule.priority, -idx)
-                    if best is None or rank > best[:2]:
-                        best = (rule.priority, -idx, rule)
+            for rule, gidx in _flat_rules(rules):
+                if not _hit_keywords(item_text, rule.keywords):
+                    continue
+                rank = (rule.priority, -gidx)
+                if best is None or rank > best[:2]:
+                    best = (rule.priority, -gidx, rule)
             if best is not None:
                 _, _, rule = best
                 return (rule.category, rule.label, "item")

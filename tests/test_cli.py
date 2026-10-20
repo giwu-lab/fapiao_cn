@@ -6,6 +6,7 @@ import os
 import signal
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -24,12 +25,20 @@ posix_only = pytest.mark.skipif(
     reason="POSIX-only: needs os.killpg / process-group signal semantics",
 )
 
+#: 需要 ``/proc``（Linux 特有）才能验证的用例：PID 身份校验靠
+#: ``/proc/<pid>/cmdline`` 判断进程归属。
+linux_only = pytest.mark.skipif(
+    not Path("/proc/self").exists(),
+    reason="Linux-only: needs /proc to inspect a process' cmdline",
+)
+
 
 @pytest.fixture
 def tmp_pid_file(tmp_path, monkeypatch):
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(cli_mod, "PID_FILE", str(log_dir / "fapiao_cn.pid"))
+    monkeypatch.setattr(cli_mod, "ENDPOINT_FILE", str(log_dir / "fapiao_cn.endpoint"))
     monkeypatch.setattr(cli_mod, "LOG_DIR", str(log_dir))
     monkeypatch.setattr(cli_mod, "LOG_FILE", str(log_dir / "server.log"))
     monkeypatch.setattr(cli_mod, "DEV_LOG_FILE", str(log_dir / "server-dev.log"))
@@ -56,7 +65,10 @@ class TestPortAvailable:
 class TestAtomicPidWrite:
     """H23: PID file written atomically with restrictive perms."""
 
+    @posix_only
     def test_writes_with_mode_0600(self, tmp_pid_file):
+        # POSIX-only: Windows 的 st_mode 表达不了 0600（永远报 0666），
+        # Windows 上的进程管理走 scripts/start-win.ps1。
         cli_mod._atomic_write_pid(4242)
         p = Path(cli_mod.PID_FILE)
         assert p.exists()
@@ -563,3 +575,103 @@ class TestCmdRestartSequencing:
             proc.wait(timeout=2)
         except (OSError, subprocess.TimeoutExpired):
             pass
+
+
+class TestEndpointPersistence:
+    """``start`` / ``dev`` 必须把实际绑定的 host:port 落盘。
+
+    ``stop`` 要等待「真正被占用」的那个 socket 被释放；如果 PID 文件只
+    记 PID、不记端口，stop 只能去等 settings 的默认端口，
+    ``start --port 9000`` 之后的 EADDRINUSE 竞态就还在。
+    """
+
+    def test_cmd_start_writes_endpoint(self, tmp_pid_file, monkeypatch):
+        popen_calls = []
+
+        class FakeProc:
+            pid = 4242
+
+        def fake_popen(cmd, **kwargs):
+            popen_calls.append((cmd, kwargs))
+            return FakeProc()
+
+        monkeypatch.setattr(cli_mod.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(cli_mod, "_port_available", lambda h, p: True)
+
+        args = type("Args", (), {"host": "127.0.0.1", "port": 9000})()
+        assert cli_mod.cmd_start(args) == 0
+        assert cli_mod._read_endpoint() == ("127.0.0.1", 9000)
+        # 绑定参数必须原样传给 uvicorn
+        assert "9000" in popen_calls[0][0]
+
+    def test_cmd_start_writes_default_endpoint(self, tmp_pid_file, monkeypatch):
+        class FakeProc:
+            pid = 4242
+
+        monkeypatch.setattr(
+            cli_mod.subprocess, "Popen", lambda cmd, **kwargs: FakeProc()
+        )
+        monkeypatch.setattr(cli_mod, "_port_available", lambda h, p: True)
+
+        args = type("Args", (), {"host": None, "port": None})()
+        assert cli_mod.cmd_start(args) == 0
+        assert cli_mod._read_endpoint() == (cli_mod.settings.host, cli_mod.settings.port)
+
+
+class TestResolveBind:
+    """``_resolve_bind`` 的优先级：命令行 > 端点文件 > settings。"""
+
+    def test_endpoint_file_wins_over_settings(self, tmp_pid_file):
+        cli_mod._write_endpoint("127.0.0.1", 9000)
+        args = type("Args", (), {"host": None, "port": None})()
+        assert cli_mod._resolve_bind(args) == ("127.0.0.1", 9000)
+
+    def test_explicit_flag_wins_over_endpoint_file(self, tmp_pid_file):
+        cli_mod._write_endpoint("127.0.0.1", 9000)
+        args = type("Args", (), {"host": "0.0.0.0", "port": 7777})()
+        assert cli_mod._resolve_bind(args) == ("0.0.0.0", 7777)
+
+    def test_falls_back_to_settings(self, tmp_pid_file):
+        args = type("Args", (), {"host": None, "port": None})()
+        assert cli_mod._resolve_bind(args) == (cli_mod.settings.host, cli_mod.settings.port)
+
+    def test_missing_endpoint_file_is_not_fatal(self, tmp_pid_file):
+        assert cli_mod._read_endpoint() is None
+
+
+class TestPidIdentityCheck:
+    """PID 文件可能指向已被系统回收的 PID —— 不能对着陌生进程组发信号。
+
+    ``os.killpg`` 会连带干掉整个进程组；如果那个 PID 已经被系统分配给
+    别的程序，误杀范围就从「一个进程」扩大到「一个进程组」。
+    """
+
+    @linux_only
+    def test_rejects_foreign_process(self):
+        # pytest 自己的 cmdline 里没有 uvicorn
+        assert cli_mod._pid_is_our_server(os.getpid()) is False
+
+    @linux_only
+    def test_accepts_uvicorn_cmdline(self):
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(5)", "uvicorn"]
+        )
+        try:
+            assert cli_mod._pid_is_our_server(proc.pid) is True
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    def test_unreadable_pid_passes(self):
+        # 不存在的 PID：/proc/<pid>/cmdline 读不到 -> 无法判定 -> 放行
+        # （与改动前的行为一致：Windows 上没有 /proc，无法做身份校验）
+        assert cli_mod._pid_is_our_server(2**22) is True
+
+    @linux_only
+    def test_cmd_stop_refuses_foreign_pid(self, tmp_pid_file, capsys):
+        """PID 文件指向陌生进程时 cmd_stop 必须拒绝发信号（返回 1）。"""
+        Path(cli_mod.PID_FILE).write_text(f"{os.getpid()}\n")
+        args = type("Args", (), {"host": None, "port": None})()
+        rc = cli_mod.cmd_stop(args)
+        assert rc == 1
+        assert "refusing to signal" in capsys.readouterr().err

@@ -178,7 +178,10 @@ def parse_ofd_invoice(ofd_bytes: bytes) -> Optional[InvoiceRecord]:
             _fill_invoice_type_from_templates(record, template_contents)
             record.page_count = len(page_contents) or record.page_count
 
-            return record.stripped() if record else None
+            # ``with_expense_category`` 与 XML / PDF 两条路径对齐：OFD 全电票
+            # 同样要产出消费类别，否则 formats._parse_ofd 拷出去的三个字段
+            # 永远是空串（空串与「报关单跳过 / 开关关闭」语义无法区分）。
+            return record.stripped().with_expense_category() if record else None
     except (zipfile.BadZipFile, KeyError, ValueError):
         return None
 

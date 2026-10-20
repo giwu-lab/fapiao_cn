@@ -11,7 +11,10 @@ dist/
 build/
 *.egg-info/
 *.egg
-wheels/
+# wheels/ 里的 wheel 本体不入库（体积大），但保留 .gitkeep 占位，
+# 让 Dockerfile 的 `COPY wheels /wheels` 在全新克隆里也成立。
+wheels/*
+!wheels/.gitkeep
 
 # Unit test / coverage reports
 .pytest_cache/

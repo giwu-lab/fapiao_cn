@@ -24,11 +24,14 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fapiao_cn.config import settings
 
 PID_FILE = "logs/fapiao_cn.pid"
+#: 记录 daemon 实际绑定的 host:port —— ``start --port 9000`` 之后
+#: ``FC_PORT`` / settings 里的默认值并不是真正占用的端口。
+ENDPOINT_FILE = "logs/fapiao_cn.endpoint"
 LOG_DIR = "logs"
 LOG_FILE = "logs/server.log"
 DEV_LOG_FILE = "logs/server-dev.log"
@@ -48,6 +51,10 @@ _SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 def _pid_path() -> Path:
     return Path(PID_FILE)
+
+
+def _endpoint_path() -> Path:
+    return Path(ENDPOINT_FILE)
 
 
 def _read_pid() -> Optional[int]:
@@ -126,6 +133,94 @@ def _atomic_write_pid(pid: int) -> None:
         except OSError:
             pass
         raise
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Atomically write ``text`` to ``path`` (mode 0600, same protocol as
+    the PID file)."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _write_endpoint(host: str, port: int) -> None:
+    """Persist the (host, port) the daemon was actually bound to.
+
+    ``start`` / ``dev`` accept ``--host`` / ``--port``, so the port in
+    ``FC_PORT`` / ``settings.port`` is not necessarily the port in use.
+    ``stop`` has to wait for the *real* socket to be released, otherwise
+    the next ``start`` still races into EADDRINUSE.
+    """
+
+    _atomic_write_text(_endpoint_path(), f"{host}:{port}\n")
+
+
+def _read_endpoint() -> Optional[Tuple[str, int]]:
+    """Read back the (host, port) recorded by :func:`_write_endpoint`."""
+
+    path = _endpoint_path()
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    host, _, port = raw.rpartition(":")
+    try:
+        return host, int(port)
+    except ValueError:
+        return None
+
+
+def _resolve_bind(args: argparse.Namespace) -> Tuple[str, int]:
+    """Resolve the (host, port) the daemon is bound to.
+
+    Precedence: explicit ``--host`` / ``--port`` > the endpoint recorded
+    at start time > ``FC_HOST`` / ``FC_PORT`` (already folded into
+    ``settings``) > the built-in defaults.
+    """
+
+    host = getattr(args, "host", None)
+    port = getattr(args, "port", None)
+    if host is None or port is None:
+        saved = _read_endpoint()
+        if saved is not None:
+            host = host or saved[0]
+            port = port or saved[1]
+    host = host or settings.host
+    port = int(port if port is not None else settings.port)
+    return host, port
+
+
+def _pid_is_our_server(pid: int) -> bool:
+    """Best-effort check that ``pid`` really is our uvicorn process.
+
+    The PID file is plain text and can outlive the process it names.  If
+    the OS has already recycled that PID, ``_alive(pid)`` is True for an
+    unrelated program and ``os.killpg`` would take down a whole *foreign*
+    process group.  On Linux we can read ``/proc/<pid>/cmdline`` and check
+    that it looks like our server.  Where /proc is unavailable (Windows,
+    macOS) we cannot verify, so the check passes and the caller proceeds
+    as before.
+    """
+
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return True  # /proc not readable -> cannot judge, keep old behaviour
+    cmdline = raw.replace(b"\0", b" ").decode("utf-8", errors="ignore")
+    return "uvicorn" in cmdline or "fapiao_cn" in cmdline
 
 
 def _signal_process(pid: int, sig: int) -> bool:
@@ -214,10 +309,11 @@ def cmd_start(args: argparse.Namespace) -> int:
     if pid and _alive(pid):
         print(f"[fapiao_cn] already running (pid={pid})")
         return 0
+    host, port = _resolve_bind(args)
     # H20: bail out early if the chosen port is already taken.
-    if not _port_available(args.host, args.port):
+    if not _port_available(host, port):
         print(
-            f"[fapiao_cn] port {args.port} on {args.host} is already in use; "
+            f"[fapiao_cn] port {port} on {host} is already in use; "
             "refusing to start uvicorn",
             file=sys.stderr,
         )
@@ -230,9 +326,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         "uvicorn",
         APP_TARGET,
         "--host",
-        args.host,
+        host,
         "--port",
-        str(args.port),
+        str(port),
     ]
     log_config_path = Path(LOG_CONFIG)
     if log_config_path.exists():
@@ -246,11 +342,12 @@ def cmd_start(args: argparse.Namespace) -> int:
         cwd=str(PACKAGE_ROOT),
     )
     _atomic_write_pid(proc.pid)
-    print(f"[fapiao_cn] started pid={proc.pid} on {args.host}:{args.port}")
+    _write_endpoint(host, port)
+    print(f"[fapiao_cn] started pid={proc.pid} on {host}:{port}")
     return 0
 
 
-def cmd_stop(_args: argparse.Namespace) -> int:
+def cmd_stop(args: argparse.Namespace) -> int:
     """Terminate the background process synchronously.
 
     Sends SIGTERM to the whole process group (uvicorn reloader + worker
@@ -269,18 +366,30 @@ def cmd_stop(_args: argparse.Namespace) -> int:
     if not _alive(pid):
         print(f"[fapiao_cn] pid {pid} not alive; cleaning pid file")
         _pid_path().unlink(missing_ok=True)
+        _endpoint_path().unlink(missing_ok=True)
         return 0
 
-    # Pull host/port out of the environment (or fall back to settings)
-    # so the port-release wait can target the same socket we bound to.
-    from fapiao_cn.config import settings
+    # 端口释放的等待必须打在**真正被占用**的那个 socket 上。``start`` /
+    # ``dev`` 可以用 ``--port`` 绑到与 FC_PORT / settings 不同的端口，
+    # 所以优先用启动时落盘的 endpoint，命令行参数可以覆盖它。
+    host, port = _resolve_bind(args)
 
-    host = os.environ.get("FC_HOST", settings.host)
-    port = int(os.environ.get("FC_PORT", str(settings.port)))
+    # PID 文件是纯文本，可能比它指向的进程活得更久。PID 被系统回收给
+    # 别的程序时，os.killpg 会连带干掉一个毫不相干的进程组 —— 先确认
+    # 这个 PID 确实是我们的 uvicorn。
+    if not _pid_is_our_server(pid):
+        print(
+            f"[fapiao_cn] pid {pid} does not look like a fapiao_cn/uvicorn "
+            "process; refusing to signal it. Remove "
+            f"{_pid_path()} manually if this is a stale pid file.",
+            file=sys.stderr,
+        )
+        return 1
 
     gone = _wait_pid_gone(pid, grace_seconds=10.0)
     port_free = _wait_port_free(host, port, timeout=5.0)
     _pid_path().unlink(missing_ok=True)
+    _endpoint_path().unlink(missing_ok=True)
 
     if not gone:
         print(
@@ -304,6 +413,11 @@ def cmd_restart(args: argparse.Namespace) -> int:
     socket is actually released, so ``cmd_start``'s port probe will
     succeed."""
 
+    # Restart must come back up on the port the running instance actually
+    # used — not on the settings default.  ``_resolve_bind`` reads the
+    # endpoint recorded at start time.
+    host, port = _resolve_bind(args)
+    args.host, args.port = host, port
     stop_rc = cmd_stop(args)
     if stop_rc != 0:
         return stop_rc
@@ -322,11 +436,12 @@ def cmd_dev(args: argparse.Namespace) -> int:
     if pid and _alive(pid):
         print(f"[fapiao_cn] already running (pid={pid})")
         return 0
+    host, port = _resolve_bind(args)
     # H20: bail out early if the chosen port is already taken (same
     # guard as cmd_start).
-    if not _port_available(args.host, args.port):
+    if not _port_available(host, port):
         print(
-            f"[fapiao_cn] port {args.port} on {args.host} is already in use; "
+            f"[fapiao_cn] port {port} on {host} is already in use; "
             "refusing to start uvicorn",
             file=sys.stderr,
         )
@@ -339,9 +454,9 @@ def cmd_dev(args: argparse.Namespace) -> int:
         "uvicorn",
         APP_TARGET,
         "--host",
-        args.host,
+        host,
         "--port",
-        str(args.port),
+        str(port),
         "--reload",
     ]
     log_config_path = Path(LOG_CONFIG)
@@ -356,8 +471,9 @@ def cmd_dev(args: argparse.Namespace) -> int:
         cwd=str(PACKAGE_ROOT),
     )
     _atomic_write_pid(proc.pid)
+    _write_endpoint(host, port)
     print(
-        f"[fapiao_cn] dev started pid={proc.pid} on {args.host}:{args.port} "
+        f"[fapiao_cn] dev started pid={proc.pid} on {host}:{port} "
         f"→ {DEV_LOG_FILE}"
     )
     return 0
@@ -389,21 +505,32 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
 
-    def _common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--host", default=settings.host, help="bind host")
-        p.add_argument("--port", type=int, default=settings.port, help="bind port")
-
-    for name, fn, help_text, has_endpoint in [
-        ("start", cmd_start, "launch uvicorn in the background", True),
-        ("stop", cmd_stop, "kill the background process", False),
-        ("restart", cmd_restart, "stop + start", True),
-        ("dev", cmd_dev, "foreground uvicorn with auto-reload", True),
-        ("test", cmd_test, "run pytest", False),
-        ("status", cmd_status, "show background-process state", False),
+    for name, fn, help_text, bind_args in [
+        ("start", cmd_start, "launch uvicorn in the background", "with_default"),
+        ("stop", cmd_stop, "kill the background process", "optional"),
+        ("restart", cmd_restart, "stop + start", "with_default"),
+        ("dev", cmd_dev, "background uvicorn with auto-reload", "with_default"),
+        ("test", cmd_test, "run pytest", "none"),
+        ("status", cmd_status, "show background-process state", "none"),
     ]:
         p = sub.add_parser(name, help=help_text)
-        if has_endpoint:
-            _common(p)
+        if bind_args == "with_default":
+            # default=None（而不是 settings.host）：显式参数与「用户没传」
+            # 必须可区分，stop / restart 才知道该用端点文件里记录的端口。
+            p.add_argument("--host", default=None, help="bind host")
+            p.add_argument("--port", type=int, default=None, help="bind port")
+        elif bind_args == "optional":
+            p.add_argument(
+                "--host",
+                default=None,
+                help="bind host (default: the host the server was started with)",
+            )
+            p.add_argument(
+                "--port",
+                type=int,
+                default=None,
+                help="bind port (default: the port the server was started with)",
+            )
         p.set_defaults(func=fn)
     return parser
 
