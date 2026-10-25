@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from pathlib import Path
 
@@ -199,17 +200,28 @@ class TestCustomsFormats:
     not ee_feature_enabled("customs"),
     reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
 )
-class TestExtractCustoms:
-    """End-to-end tests for ``/extract/customs``."""
+class TestCustomsBatch:
+    """End-to-end tests for ``/customs/batch``（多文件报关单提取）。"""
 
     def _path(self, name: str) -> str:
         return os.path.join(_TEST_DIR, "报关单", name)
 
-    def test_extract_customs_refund(self, auth_headers):
-        path = self._path("L20260602000010_0429.pdf")
-        resp = client.post("/extract/customs", json={"file_path": path}, headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
+    def _post_files(self, auth_headers, *names):
+        """按 multipart ``files``（重复字段）提交若干报关单，返回响应数组。"""
+
+        payload = []
+        for name in names:
+            path = self._path(name)
+            with open(path, "rb") as f:
+                payload.append(
+                    ("files", (os.path.basename(path), f.read(), "application/pdf"))
+                )
+        resp = client.post("/customs/batch", headers=auth_headers, files=payload)
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def test_customs_batch_refund(self, auth_headers):
+        data = self._post_files(auth_headers, "L20260602000010_0429.pdf")[0]
         assert data["declaration_variant"] == "出口退税联"
         assert data["customs_no"] == "223120260001921706"
         assert data["shipper_name"] == "重庆旺成贸易有限公司"
@@ -218,56 +230,76 @@ class TestExtractCustoms:
         assert data["currency"] == "USD"
         assert data["total_amount"] == "5332.28"
 
-    def test_extract_customs_operational(self, auth_headers):
-        path = self._path("L20260626000009_BGD_SNKO020260509798.pdf")
-        resp = client.post("/extract/customs", json={"file_path": path}, headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
+    def test_customs_batch_operational(self, auth_headers):
+        data = self._post_files(
+            auth_headers, "L20260626000009_BGD_SNKO020260509798.pdf"
+        )[0]
         assert data["declaration_variant"] == "操作联"
         assert data["customs_no"] == "222920260002109647"
         assert data["declarant_name"] == "上海航联报关有限责任公司"
 
-    def test_extract_customs_multi_page_refund(self, auth_headers):
+    def test_customs_batch_multi_page_refund(self, auth_headers):
         """6-page 退税联 declaration: items must aggregate across pages."""
-        path = self._path("L20260625000008_0522.pdf")
-        resp = client.post("/extract/customs", json={"file_path": path}, headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
+        data = self._post_files(auth_headers, "L20260625000008_0522.pdf")[0]
         assert data["page_count"] == 6
         assert data["item_count"] == 24
         assert data["total_amount"] == "49195.76"
 
-    def test_extract_customs_merged_document_skips_release(self, auth_headers):
+    def test_customs_batch_merged_document_skips_release(self, auth_headers):
         """The 报关单 + 放行条 merged PDF must yield 报关单 fields only."""
-        path = self._path("L20260528000009_21708433876_报关单放行条合并文档(1).pdf")
-        resp = client.post("/extract/customs", json={"file_path": path}, headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
+        data = self._post_files(
+            auth_headers, "L20260528000009_21708433876_报关单放行条合并文档(1).pdf"
+        )[0]
         assert data["declaration_variant"] == "操作联"
         assert data["customs_no"] == "010120260000240192"
         assert data["declarant_name"] == "北京巡宇国际货运代理有限公司"
         # The 放行条 page must not produce a customs_no.
         assert data["customs_no"]
 
-    def test_extract_customs_upload_form(self, auth_headers):
+    def test_customs_batch_multiple_files_in_one_request(self, auth_headers):
+        """Several declarations in one request; results keep input order."""
+        data = self._post_files(
+            auth_headers,
+            "L20260602000010_0429.pdf",
+            "L20260626000009_BGD_SNKO020260509798.pdf",
+            "L20260625000008_0522.pdf",
+        )
+        assert len(data) == 3
+        assert [d["customs_no"] for d in data] == [
+            "223120260001921706",
+            "222920260002109647",
+            "530420260000900809",
+        ]
+        assert [d["item_count"] for d in data] == [3, 2, 24]
+
+    def test_customs_batch_json_files_array(self, auth_headers):
+        """JSON 入参：``{"files": [{"filename": ..., "base64": ...}]}``。"""
+        path = self._path("L20260602000010_0429.pdf")
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        resp = client.post(
+            "/customs/batch",
+            json={"files": [{"filename": "0429.pdf", "base64": b64}]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["customs_no"] == "223120260001921706"
+
+    def test_customs_batch_unauthenticated(self):
+        """Without an auth header, the endpoint must reject."""
         path = self._path("L20260602000010_0429.pdf")
         with open(path, "rb") as f:
             resp = client.post(
-                "/extract/customs",
-                headers=auth_headers,
-                files={"file": ("0429.pdf", f, "application/pdf")},
+                "/customs/batch",
+                headers={},
+                files=[("files", ("0429.pdf", f.read(), "application/pdf"))],
             )
-        assert resp.status_code == 200
-        assert resp.json()["customs_no"] == "223120260001921706"
-
-    def test_extract_customs_unauthenticated(self):
-        """Without an auth header, the endpoint must reject."""
-        path = self._path("L20260602000010_0429.pdf")
-        resp = client.post("/extract/customs", json={"file_path": path})
         assert resp.status_code in (401, 403)
 
-    def test_extract_customs_no_input(self, auth_headers):
-        resp = client.post("/extract/customs", json={}, headers=auth_headers)
+    def test_customs_batch_no_input(self, auth_headers):
+        resp = client.post("/customs/batch", json={}, headers=auth_headers)
         assert resp.status_code == 400
 
 

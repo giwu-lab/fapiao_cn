@@ -1286,9 +1286,12 @@ class TestExpenseCategorySamples:
         也不能落到具体消费类目。
 
         开源版没有报关单解析器，报关单 PDF 会落到默认解析器 → 未命中任何
-        规则 → ``unclassified``（"没归类"，不是"归到了某个类目"）；
-        企业版走报关单解析器 → 字段全空 → 三字段空字符串。两者都满足
-        "不被分到具体消费类目"。
+        规则 → ``unclassified``（"没归类"，不是"归到了某个类目"）。
+
+        企业版：报关单解析器是「守门包装」—— 报关单记录不是
+        ``InvoiceRecord``，发票管线会用 ``getattr(r, field, "")`` 把它压成
+        一堆空字段（数据被**静默吞掉**），包装器直接抛错。于是这里断言
+        ValueError，且错误信息指明正确端点。
         """
         from pathlib import Path
 
@@ -1298,6 +1301,10 @@ class TestExpenseCategorySamples:
         settings.expense_category_enabled = True
         path = Path("samples") / sample_path
         assert path.exists(), f"sample not found: {path}"
+        if ee_feature_enabled("customs"):
+            with pytest.raises(ValueError, match="/customs/batch"):
+                run(path.read_bytes())
+            return
         result = run(path.read_bytes())
         rec = result.record
         assert rec.expense_category in ("", "unclassified"), sample_path

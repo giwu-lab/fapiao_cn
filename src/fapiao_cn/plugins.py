@@ -49,7 +49,7 @@ class FapiaoPlugin(Protocol):
         ...
 
     def register_customs_route(self, app: FastAPI) -> None:
-        """注册 ``POST /extract/customs`` 的真实实现。"""
+        """注册报关单提取路由（``POST /customs/batch``）的真实实现。"""
         ...
 
     def register_batch_route(self, app: FastAPI) -> None:

@@ -6,6 +6,44 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-25
+
+### Changed
+- **报关单端点改为批量**（BREAKING）：`POST /extract/customs`（单文件、返回对象）
+  改为 **`POST /customs/batch`**（多文件、返回数组）。
+
+  - 入参与 `/extract/batch` 对齐：multipart 里**重复的 `files`** 字段，或 JSON
+    `{"files": [{"filename": ..., "base64": ...}]}`。
+  - 限额复用同一套开关：最多 50 个（`FC_MAX_BATCH_FILES`）、单文件 10 MB
+    （`FC_MAX_FILE_MB`）、总 500 MB（`FC_MAX_BATCH_TOTAL_MB`）；并发
+    `FC_BATCH_WORKERS`（默认 4），与 `/extract/batch` **共用同一个线程池**。
+  - 返回 `CustomsDeclarationHeader` 数组，顺序与上传顺序一致；单个文件解析失败
+    落进该项的 `message`，不影响整批。
+  - **迁移**：URL 换成 `/customs/batch`，字段名 `file` → `files`，响应从对象
+    改成数组（取 `[0]`）。
+
+- **报关单误发不再静默吞字段**（FIX）：报关单 PDF 发到 `/extract` 或
+  `/extract/batch` 时，过去会返回一堆空字段而 `message` 仍是 `success`
+  —— 调用方察觉不到数据已经丢了。根因是发票管线 `_aggregate()` 用
+  `getattr(record, field, "")` 把报关单记录压成 `InvoiceRecord`，报关单没有的
+  字段全部静默变成空串。
+
+  现在企业版的报关单解析器是**守门包装**：记录类型不是 `InvoiceRecord` 就抛
+  `ValueError`，`/extract` 因此返回 **422**，`message` 里写明「请走
+  `/customs/batch`」；`/extract/batch` 则落进对应项的 `message`。
+
+  这条修复完全在企业版包内完成 —— 开源版的 `pipeline` / `formats` 一行未改。
+
+### Added
+- `fapiao_cn_ee/pool.py`：`/extract/batch` 与 `/customs/batch` 共用的线程池
+  （此前两个批量端点各开各的，同时被调用时线程数会翻倍）。
+- 企业版仓库补上 ruff / mypy 配置 —— 此前缺失，`ruff check` 跑的是默认规则
+  而不是与开源版一致的 `E,F,I`。
+
+### Fixed
+- 开源版 `ruff check src tests` 的一处既有 E501（报关单样本的中文票面原文，
+  折行会破坏解析器依赖的版面结构）—— 改为 per-file-ignores。
+
 ## [1.0.0] - 2026-10-25
 
 首次**对外正式发布**。本节汇总此前内部迭代的全部内容 —— 对外只承认这一次

@@ -85,9 +85,16 @@ class TestExtractExpenseCategoryWired:
     def test_extract_customs_skips_classification(
         self, auth_headers, sample_path
     ):
-        """``/extract/customs`` 路径返回的是 CustomsDeclarationHeader 不是
-        ExtractResponse；``/extract`` 误喂报关单会被识别为无法解析，
-        走 message=success 但分类保持空字符串。"""
+        """把报关单误发给 ``/extract`` 时，**不能**被静默压成空字段。
+
+        企业版：报关单解析器是「守门包装」—— 报关单记录不是
+        ``InvoiceRecord``，发票管线会把它压成一堆空字符串而 message 仍是
+        "success"，调用方根本察觉不到数据被吞。包装器直接抛错，于是这里
+        拿到 422 + 明确的指引（改走 ``/customs/batch``）。
+
+        开源版：没有报关单解析器 → 落到默认解析器 → 未命中规则 →
+        unclassified，分类三字段保持空。
+        """
         from fapiao_cn.config import settings
 
         settings.expense_category_enabled = True
@@ -97,12 +104,16 @@ class TestExtractExpenseCategoryWired:
             headers=auth_headers,
             files={"file": (os.path.basename(sample_path), contents)},
         )
-        # 报关单走 /extract 时通常 message 含 error; 不是关键路径但
-        # 若意外归到 /extract 路径也不应把报关单分到具体消费类目
-        if resp.status_code == 200:
+        if ee_feature_enabled("customs"):
+            # 企业版：守门包装器拦下 → 422，且错误信息指明正确的端点。
+            assert resp.status_code == 422, resp.text
+            message = resp.json().get("message", "")
+            assert message.startswith("error:"), message
+            assert "/customs/batch" in message, message
+        else:
+            # 开源版：没有报关单能力，落到默认解析器，未命中任何分类规则。
+            assert resp.status_code == 200
             body = resp.json()
-            # 开源版没有报关单解析器 → 落到默认解析器 → 未命中规则 →
-            # unclassified；企业版走报关单解析器 → 三字段空字符串。
             assert body.get("expense_category", "") in ("", "unclassified")
             assert body.get("expense_category_source", "") == ""
 
@@ -138,8 +149,8 @@ class TestExtractExpenseCategoryWired:
     not ee_feature_enabled("customs"),
     reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
 )
-class TestExtractCustomsEndpointClassify:
-    """``/extract/customs`` 不应触发 expense_category 分类逻辑。"""
+class TestCustomsBatchEndpointClassify:
+    """``/customs/batch`` 不应触发 expense_category 分类逻辑。"""
 
     def test_customs_endpoint_skips_expense_category(self, auth_headers):
         from fapiao_cn.config import settings
@@ -149,13 +160,13 @@ class TestExtractCustomsEndpointClassify:
             "报关单/L20260528000009_21708433876_报关单放行条合并文档(1).pdf"
         )
         resp = client.post(
-            "/extract/customs",
+            "/customs/batch",
             headers=auth_headers,
-            files={"file": ("bgd.pdf", contents)},
+            files=[("files", ("bgd.pdf", contents))],
         )
         assert resp.status_code == 200, resp.text
-        body = resp.json()
+        body = resp.json()[0]
         # CustomsDeclarationHeader 没有 expense_category 字段；
         # 这一项作为不变量检查（如果 schema 误把 expense_category 加到
-        # CustomsDeclarationHeader，应让用户知道走 /extract 而不是 /extract/customs）
+        # CustomsDeclarationHeader，分类逻辑就会泄漏到报关单响应里）
         assert "expense_category" not in body

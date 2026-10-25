@@ -15,7 +15,7 @@ import signal
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Awaitable, Callable, MutableMapping, Optional
+from typing import Awaitable, Callable, List, MutableMapping, Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -163,11 +163,11 @@ def _customs_field_schema() -> list:
 # 路由照样注册（两版路由表一致，客户端不会因为版本差异拿到 404），
 # 但一律返回 403 feature_not_available。真正的实现在企业版发行包里。
 def _register_customs_unavailable(app: FastAPI) -> None:
-    """注册 ``/extract/customs`` 的 403 占位路由。"""
+    """注册 ``/customs/batch`` 的 403 占位路由。"""
 
     @app.post(
-        "/extract/customs",
-        response_model=CustomsDeclarationHeader,
+        "/customs/batch",
+        response_model=List[CustomsDeclarationHeader],
         dependencies=[
             Depends(auth_required("extract")),
             Depends(require_feature(Feature.CUSTOMS)),

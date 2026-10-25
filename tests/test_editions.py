@@ -143,8 +143,8 @@ class TestEnterpriseRoutes:
     def test_unauthenticated_gets_401_not_403(self):
         """鉴权优先：没有 key 先 401，不泄漏版本信息。"""
         resp = client.post(
-            "/extract/customs",
-            files={"file": ("x.pdf", b"%PDF-1.4")},
+            "/customs/batch",
+            files=[("files", ("x.pdf", b"%PDF-1.4"))],
         )
         assert resp.status_code == 401
         resp = client.post(
@@ -166,17 +166,17 @@ class TestEnterpriseRoutes:
             if not sample.exists():
                 pytest.skip("sample not available")
             resp = client.post(
-                "/extract/customs",
+                "/customs/batch",
                 headers=auth_headers,
-                files={"file": ("bgd.pdf", sample.read_bytes())},
+                files=[("files", ("bgd.pdf", sample.read_bytes()))],
             )
             assert resp.status_code == 200
-            assert resp.json()["customs_no"] == "223120260001921706"
+            assert resp.json()[0]["customs_no"] == "223120260001921706"
         else:
             resp = client.post(
-                "/extract/customs",
+                "/customs/batch",
                 headers=auth_headers,
-                files={"file": ("x.pdf", b"%PDF-1.4")},
+                files=[("files", ("x.pdf", b"%PDF-1.4"))],
             )
             assert resp.status_code == 403
             detail = resp.json()["detail"]
@@ -202,11 +202,11 @@ class TestEnterpriseRoutes:
         """两版路由表一致 —— 客户端不会因为版本差异拿到 404。"""
         paths = {route.path for route in app.routes}
         assert "/extract/batch" in paths
-        assert "/extract/customs" in paths
+        assert "/customs/batch" in paths
 
     def test_openapi_marks_enterprise_paths(self):
         schema = app.openapi()
-        for path in ("/extract/batch", "/extract/customs"):
+        for path in ("/extract/batch", "/customs/batch"):
             assert path in schema["paths"]
             assert schema["paths"][path]["post"]["x-required-edition"] == "ee"
 

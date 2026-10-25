@@ -12,7 +12,7 @@
 镜像特性：多阶段 `python:3.12-slim`、非 root、HEALTHCHECK 内置、`/app/logs` volume 挂载、时区 `Asia/Shanghai`、镜像 < 250 MB。Dockerfile 默认走国内 APT 镜像（`APT_MIRROR=mirrors.aliyun.com`），需要切回官方源：
 
 ```bash
-docker build --build-arg APT_MIRROR= -t fapiao_cn:1.0.0-ce .
+docker build --build-arg APT_MIRROR= -t fapiao_cn:1.1.0-ce .
 ```
 
 ### 构建方案
@@ -31,7 +31,7 @@ Dockerfile 会自动判断走哪条，**两条路都不需要改 Dockerfile**：
 bash scripts/prepare_wheels.sh           # 等价于 pip wheel --wheel-dir=wheels <deps>
 # 或指定 PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ bash scripts/prepare_wheels.sh
 
-docker build -t fapiao_cn:1.0.0-ce .
+docker build -t fapiao_cn:1.1.0-ce .
 ```
 
 > wheels/ 不用每次都重生成；只有锁定依赖版本时才需要重跑。脚本会自动用 `.venv/bin/python3`（如有）或系统 `python3`。
@@ -41,7 +41,7 @@ docker build -t fapiao_cn:1.0.0-ce .
 
 ```bash
 docker buildx create --use --driver docker-container --network host   # 一次性建 host 网络 builder
-docker buildx build -t fapiao_cn:1.0.0-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
+docker buildx build -t fapiao_cn:1.1.0-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
 ```
 
 **方案 C：完全离线**（路线 1 失败 + 上面共享网络也没法用时）—— 在主机上准备好 wheels **和** 基础 deb 包（apt-offline 工具链），用本地 deb 仓库喂给镜像。绝大多数情况下路线 1 + 共享网络已够用，此处不展开。
@@ -131,8 +131,8 @@ print(resp.seller_name, resp.total_amount, resp.message)
 | GET | `/formats` | 支持的全部票种 |
 | GET | `/formats/customs` | 海关出口货物报关单字段 schema（**两版共有的响应契约**，只有企业版能实际解析报关单） |
 | POST | `/extract` | 单文件提取 |
-| POST | `/extract/customs` | **企业版** — 海关出口货物报关单提取（操作联 / 出口退税联） |
 | POST | `/extract/batch` | **企业版** — 批量提取（并行，按输入顺序返回） |
+| POST | `/customs/batch` | **企业版** — 海关出口货物报关单**批量**提取（操作联 / 出口退税联），一次可传多份 |
 | POST | `/raw` | 仅返回 PDF 原始文本，XML/OFD 拒绝 |
 | POST | `/verify` | 国税查验代理（需 `FC_VERIFY_ENABLED=true`） |
 | POST | `/extract-and-verify` | 提取 + 查验一站式 |
@@ -154,6 +154,34 @@ curl -H "Content-Type: application/json" \
 
 `/extract/batch` 限制：最多 50 个文件、单文件 10 MB（与 `/extract` 一致，由 `FC_MAX_FILE_MB` 统一控制）、总大小 500 MB。
 
+### 报关单批量提取（`POST /customs/batch`，企业版）
+
+一次可以传多份报关单，返回数组，顺序与上传顺序一致。入参与 `/extract/batch`
+完全对齐 —— multipart 里**重复的 `files` 字段**，或 JSON 的
+`{"files": [{"filename": ..., "base64": ...}]}`：
+
+```bash
+# multipart：同一个字段名重复多次
+curl -H "X-API-Key: $KEY" \
+  -F "files=@报关单A.pdf" \
+  -F "files=@报关单B.pdf" \
+  http://localhost:8091/customs/batch
+
+# 响应：数组，每项一份报关单
+# [{"customs_no": "223120260001921706", "items": [...], ...}, {...}]
+```
+
+限额与 `/extract/batch` 相同（最多 50 个、单文件 10 MB、总 500 MB），并发由
+`FC_BATCH_WORKERS` 控制。
+
+> ⚠️ **1.1.0 破坏性变更**：报关单端点从 `POST /extract/customs`（单文件、返回
+> 对象）改成了 `POST /customs/batch`（多文件、返回数组）。旧的
+> `/extract/customs` **已不存在**（请求它得到 404）。迁移：URL 换成
+> `/customs/batch`，字段名从 `file` 换成 `files`，响应取数组。
+
+> 把报关单误发到 `/extract` 或 `/extract/batch` 时，服务不再**静默返回空字段**
+> （那是数据丢失），而是返回 422 并在 `message` 里指明「请走 `/customs/batch`」。
+
 ## 发行版：CE（开源版）与 EE（企业版）
 
 本项目分两个**互相独立的发行包**：
@@ -161,7 +189,7 @@ curl -H "Content-Type: application/json" \
 | 发行包 | 内容 | 能力 |
 | --- | --- | --- |
 | `fapiao_cn` | 开源版（CE） | 发票 / 客票 / 费用分类 / 查验代理 |
-| `fapiao_cn_ee` | 企业版（EE），依赖 `fapiao_cn==<同版本>` | **报关单解析**（`/extract/customs`）、**批量提取**（`/extract/batch`） |
+| `fapiao_cn_ee` | 企业版（EE），依赖 `fapiao_cn==<同版本>` | **报关单解析**（`/customs/batch`）、**批量提取**（`/extract/batch`） |
 
 **商业边界落在发行包上，不是运行时的 if。** CE 的 wheel 里没有报关单解析器，
 CE 的镜像里连 `fapiao_cn_ee` 的字节码都不存在（构建时按 `ARG EDITION` 把
@@ -193,7 +221,7 @@ JSON 许可证：
 docker run ... \
   -e FC_LICENSE_FILE=/app/license.json \
   -v /path/to/license.json:/app/license.json:ro \
-  fapiao_cn:1.0.0-ee
+  fapiao_cn:1.1.0-ee
 ```
 
 - 许可证有效 → 开放被授权的能力；
@@ -247,12 +275,12 @@ docker run ... \
 
 ```bash
 # ① 开源版：直接在本仓库构建
-docker build -t fapiao_cn:1.0.0-ce .
+docker build -t fapiao_cn:1.1.0-ce .
 
 # ② 企业版：在企业版仓库（与本仓库同级检出）里把 wheel 产出到本仓库的 wheels/
 python ../fapiao_cn_ee/scripts/build_ee_wheel.py \
     --ce-root . --wheels-dir ./wheels
-docker build --build-arg EDITION=ee -t fapiao_cn:1.0.0-ee .
+docker build --build-arg EDITION=ee -t fapiao_cn:1.1.0-ee .
 ```
 
 `build_ee_wheel.py` 不进 wheel（只进 sdist），签发工具与厂商密钥始终留在
@@ -378,7 +406,7 @@ HTTP 422 响应体就是 `ExtractResponse` / `PdfRaw`，错误字符串完整保
 > - `other` = "中央非税" 票种被显式归类（`source="ticket"`）—— 已知是行政事业性收费
 > - `unclassified` = "没规则命中"（`source=""`）—— 卖方 / 明细 / 编码都不认识，待人工或后续 PR 补规则
 >
-> 报关单（`/extract/customs`）不属于企业报销场景，分类逻辑显式跳过该票种——即使卖方碰巧含「运输」「餐饮」等关键词，分类三字段也保持空字符串（与 `unclassified` 不同）。
+> 报关单（`/customs/batch`）不属于企业报销场景，分类逻辑显式跳过该票种——即使卖方碰巧含「运输」「餐饮」等关键词，分类三字段也保持空字符串（与 `unclassified` 不同）。
 
 > PDF 票面的 `items[]` 恒为空，所以 PDF 走 `seller` 路径（依赖卖方关键词）；XML 全电发票因有明细，`item` / `code` 也参与判定，**同一份内容（PDF 转 XML）可能归到不同细分类**——例如「购_零售_01」XML 因明细含「*餐饮服务*」被归到 `dining`，PDF 因无明细落到兜底空。
 >
@@ -435,7 +463,7 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 
 | Scope | 端点 |
 | --- | --- |
-| `extract` | `/extract`、`/extract/batch`（企业版）、`/extract/customs`（企业版）、`/raw`、`/extract-and-verify`、`/formats`、`/formats/customs` |
+| `extract` | `/extract`、`/extract/batch`（企业版）、`/customs/batch`（企业版）、`/raw`、`/extract-and-verify`、`/formats`、`/formats/customs` |
 | `verify` | `/verify` |
 | `admin` | `/health/full`（超集，含 extract / verify） |
 
@@ -526,8 +554,8 @@ python -m pytest tests/ -v                  # 直接 pytest
 > + Docker 冒烟（真实票据样本与完整用例集在私有验证环境，不入公开仓库）；
 > 企业版自身的用例在**企业版仓库**里单独运行。
 
-开源版 **464** 条用例通过（76 skipped / 2 xfailed）；装上企业版包并提供有效
-许可证后 **509** 条通过（31 skipped）；企业版仓库另有 **23** 条许可证与插件
+开源版 **464** 条用例通过（77 skipped / 2 xfailed）；装上企业版包并提供有效
+许可证后 **510** 条通过（31 skipped）；企业版仓库另有 **23** 条许可证与插件
 专项测试。样本共 41 个（34 PDF + 5 XML + 2 OFD）。
 
 > `samples/` 按票种子目录组织：`新电子发票-标准/` / `新电子发票-旧格式/` / `成品油合并代码/` / `铁路电子客票/` / `航空运输电子客票/` / `中央非税收入统一票据/` / `报关单/` / `全电发票-XML/` / `全电发票-OFD/`。

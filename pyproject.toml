@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fapiao_cn"
-version = "1.0.0"
+version = "1.1.0"
 description = "中国电子发票字段提取服务（PDF + XML）"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -78,6 +78,11 @@ exclude = ["dist", "build", "wheels"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# 报关单样本的票面原文（含中文表头）按原样保留在测试里 —— 折行会破坏
+# 解析器依赖的版面结构，所以这一段的 E501 是数据本身的长度，不是代码风格。
+"tests/test_parsers.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
