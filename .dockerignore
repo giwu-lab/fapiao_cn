@@ -13,6 +13,11 @@ build/
 .eggs/
 *.tar.gz
 
+# 企业版源码（ee/）不进构建上下文：企业版 wheel 由宿主侧的
+# scripts/build_ee_wheel.py 预先构建到 wheels/，镜像只从 wheels 安装。
+# 这样连"构建上下文"里都没有企业版源码 —— 开源版的产物边界更干净。
+ee/
+
 # 虚拟环境（本地开发产物，体积大且与镜像无关）
 # 注意：.gitignore 里也有这几条 —— 两边必须同步，否则 `pip install -e .`
 # 之后本地的 .venv/ 会整个进构建上下文（>200 MB）。

@@ -16,6 +16,7 @@ from fapiao_cn.parsers.merged_code import (
     _extract_seller_after_total,
 )
 from fapiao_cn.utils import extract_people, looks_like_company_name, looks_like_tax_id
+from tests._helpers import ee_feature_enabled
 
 
 class TestLooksLikeCompanyName:
@@ -983,8 +984,12 @@ class TestOfdParser:
         assert rec is None or rec.invoice_number == ""
 
 
+@pytest.mark.skipif(
+    not ee_feature_enabled("customs"),
+    reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
+)
 class TestCustomsDeclaration:
-    """Unit tests for ``fapiao_cn.parsers.customs_declaration``."""
+    """Unit tests for ``fapiao_cn_ee.customs_declaration``."""
 
     OPERATIONAL_TEXT = """
 中华人民共和国海关出口货物报关单 *222920260002109647*
@@ -1046,7 +1051,7 @@ Page 1 of 1 打印日期：2026-05-26
 """
 
     def _parse(self, text: str):
-        from fapiao_cn.parsers.customs_declaration import parse_customs_declaration
+        from fapiao_cn_ee.customs_declaration import parse_customs_declaration
 
         return parse_customs_declaration(
             text,
@@ -1116,7 +1121,7 @@ Page 1 of 1 打印日期：2026-05-26
         must stop at the 放行条 boundary."""
 
         full_text = self.OPERATIONAL_TEXT + "\n" + self.NON_DECLARATION_TEXT
-        from fapiao_cn.parsers.customs_declaration import parse_customs_declaration
+        from fapiao_cn_ee.customs_declaration import parse_customs_declaration
 
         rec = parse_customs_declaration(
             self.OPERATIONAL_TEXT,
@@ -1277,7 +1282,14 @@ class TestExpenseCategorySamples:
         ],
     )
     def test_customs_declaration_skips_classification(self, sample_path):
-        """报关单不参与消费类别分类：即便卖方偶然含「运输」/「餐饮」等关键词，三字段保持空字符串。"""
+        """报关单不参与消费类别分类：即便卖方偶然含「运输」/「餐饮」等关键词，
+        也不能落到具体消费类目。
+
+        开源版没有报关单解析器，报关单 PDF 会落到默认解析器 → 未命中任何
+        规则 → ``unclassified``（"没归类"，不是"归到了某个类目"）；
+        企业版走报关单解析器 → 字段全空 → 三字段空字符串。两者都满足
+        "不被分到具体消费类目"。
+        """
         from pathlib import Path
 
         from fapiao_cn.config import settings
@@ -1288,8 +1300,8 @@ class TestExpenseCategorySamples:
         assert path.exists(), f"sample not found: {path}"
         result = run(path.read_bytes())
         rec = result.record
-        assert rec.expense_category == "", sample_path
-        assert rec.expense_category_label == "", sample_path
+        assert rec.expense_category in ("", "unclassified"), sample_path
+        assert rec.expense_category_label in ("", "未归类"), sample_path
         assert rec.expense_category_source == "", sample_path
 
     def test_customs_declaration_skipped_even_if_seller_has_keywords(self):

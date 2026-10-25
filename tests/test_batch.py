@@ -5,9 +5,11 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from fapiao_cn.server import app
+from tests._helpers import ee_feature_enabled
 
 client = TestClient(app)
 
@@ -20,6 +22,10 @@ def _load(name: str) -> bytes:
     return (TEST_DIR / name).read_bytes()
 
 
+@pytest.mark.skipif(
+    not ee_feature_enabled("batch"),
+    reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
+)
 class TestBatchExtract:
     def test_two_valid_pdfs(self, auth_headers):
         """Two valid invoices should return a list of two results."""
@@ -67,10 +73,14 @@ class TestBatchExtract:
         """H4: an unexpected parse exception must be logged with a traceback."""
         import logging
 
+        import fapiao_cn_ee.batch as ee_batch
+
         def _boom(contents, filename=""):
             raise RuntimeError("simulated parser crash")
 
-        monkeypatch.setattr("fapiao_cn.server.parse_pdf", _boom)
+        # 批量实现在企业版发行包里，所以要 patch 它自己引用的 parse_pdf
+        # （patch fapiao_cn.server.parse_pdf 对它没有影响）。
+        monkeypatch.setattr(ee_batch, "parse_pdf", _boom)
 
         data = (
             ("files", (
@@ -79,7 +89,7 @@ class TestBatchExtract:
                 "application/pdf",
             )),
         )
-        with caplog.at_level(logging.ERROR, logger="fapiao_cn.server"):
+        with caplog.at_level(logging.ERROR, logger="fapiao_cn.ee.batch"):
             resp = client.post("/extract/batch", headers=auth_headers, files=data)
         assert resp.status_code == 200
         body = resp.json()

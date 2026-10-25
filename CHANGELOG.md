@@ -6,7 +6,43 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-25
+
 ### Added
+- **发行版拆分（CE / EE）与许可证体系**: 报关单解析与批量提取下沉为**独立的
+  发行包** `fapiao_cn_ee`（企业版），开源版 `fapiao_cn` 不再包含这部分实现。
+
+  - 报关单解析器（`parsers/customs_declaration.py`，950 行）已移出开源版，
+    开源版的 dispatch 注册表里没有报关单规则 —— `/formats` 不再列出它，
+    `/extract` 也不会把报关单 PDF 派给它。
+  - 新增 `src/fapiao_cn/editions.py`：`Edition` / `Feature` / `Entitlements`
+    三层能力模型，以及 `require_feature()` 依赖。
+  - 新增 `src/fapiao_cn/plugins.py`：CE ↔ EE 的插件契约（`FapiaoPlugin`），
+    EE 包通过 `importlib.util.find_spec("fapiao_cn_ee")` 被发现。
+  - 新增 `GET /capabilities`（公开）：报告当前发行版与可用能力，前端据此
+    显示/隐藏企业版入口。
+  - 企业版能力由**许可证**授权（Ed25519 签名）：缺失 / 过期 / 签名不合法
+    时**自动降级成开源版行为**（端点返回 403，服务本身照常工作），
+    `SIGHUP` 可热重载 —— 续期不用重启容器。
+  - **刻意没有 `FC_EDITION` 之类的版本开关**：开源版用户改一个环境变量就能
+    解锁企业版的话，整套商业边界就作废了。版本只由「装了哪个发行包 +
+    许可证是否有效」决定。
+
+  商业边界落在**发行包**上：CE 的 wheel 与镜像里没有 `fapiao_cn_ee` 的
+  任何字节码（Dockerfile 按 `ARG EDITION` 剔除企业版 wheel）。
+
+- **企业版仓库独立为私有库**: 企业版实现（`fapiao_cn_ee` 包、签发工具
+  `scripts/sign_license.py`、构建脚本、授权手册 `AUTHORIZATION.md`）已从
+  开源仓库拆出，落在私有仓库 `fapiao_cn_ee`；本仓库只保留 CE 代码与两边
+  对接用的插件契约。签发私钥始终在仓库外保管，不入库。
+
+- **`/extract/customs` 与 `/extract/batch` 的门禁**: 未授权时返回结构化 403
+  （`error=feature_not_available`），而不是 404 —— 两个版本的路由表保持
+  一致，客户端不会因为版本差异崩溃。鉴权优先于版本判定：无 key 的请求先
+  得到 401，不会先撞到 403（否则等于向未鉴权方泄漏「这是企业版功能」）。
+
+- **Docker 入口的属主修复**: 见下方 Fixed。
+
 - **消费类别分类（`expense_category`）**: `/extract` 响应新增三个字段
   —— `expense_category`（枚举值）、`expense_category_label`（中文显示）、
   `expense_category_source`（命中层级）。把发票归到交通 / 住宿 / 餐饮 / 快递 /
@@ -66,6 +102,32 @@ adheres to [Semantic Versioning](https://semver.org/).
   `parse_pdf` 兜底返回 422（`message=error: file_too_large`）。
 
 ### Fixed
+- **Linux 上容器启动即崩溃**: `PermissionError: [Errno 13] Permission denied:
+  '/app/logs/audit.log'` → `ValueError: Unable to configure handler
+  'audit_file'`。
+
+  `deploy/log_config.yaml` 的 `audit_file` 是 `RotatingFileHandler`，它在
+  **构造时**（`delay` 默认 False）就 `open()` 文件；uvicorn 在
+  `Config.__init__` → `configure_logging()` → `dictConfig()` 阶段创建
+  handler，此时打不开文件就抛 `PermissionError` 并被包装成 `ValueError`
+  —— 容器在启动阶段直接退出，compose 表现为无限重启。
+
+  根因是属主：宿主把 `./logs` 挂到 `/app/logs` 时，那个目录在 Linux 上
+  通常是 `root:root 0755`（compose 用 root 创建），而服务以非 root 用户
+  `fapiao_cn`（uid 999）运行。旧版 entrypoint 里的 `chmod 777 /app/logs`
+  救不了：容器以非 root 运行，对 root 拥有的目录 `chmod` 直接 `EPERM`
+  被 `|| true` 吞掉；就算目录 chmod 成功，**已存在的 root:root 0644 的
+  `audit.log` 本身**依然会被 `open(..., 'a')` 拒绝。
+
+  现在 entrypoint 以 root 进入：先把日志目录**和里面已存在的日志文件**
+  一起 `chown` 给应用用户，再以 `setpriv --reuid --regid --init-groups`
+  降权回 `fapiao_cn` 启动 uvicorn（`exec` 让它仍是 PID 1，`docker stop`
+  的 SIGTERM 语义不变）。降权手段不可用时（既无 `setpriv` 也无 `su`）
+  明确失败退出，**绝不静默地以 root 跑服务**。
+
+  另外：写不了日志目录时不再抛一句难懂的 `PermissionError`，而是先做
+  预检，给出「`sudo chown -R 999:999 logs`」这样可直接执行的提示。
+
 - **全新克隆 / CI 的 `docker build` 必然失败**: Dockerfile 改成完全离线构建后
   第 11 行 `COPY wheels /wheels` 依赖一个**被 .gitignore 排除**的目录，
   仓库里并不存在它 —— 干净检出（含 `.github/workflows/ci.yml` 的

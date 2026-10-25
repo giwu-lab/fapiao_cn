@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8091
     title: str = "fapiao_cn"
-    version: str = "1.2.1"
+    version: str = "1.2.2"
 
     # pdfplumber does not render PDF to images; keep for future OCR fallback.
     # /extract 与 /extract/batch 共用这一个上限，调大它等于同时放宽两个入口。
@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     # false 时 expense_category/label/source 三个字段恒为空字符串，
     # 不消耗额外计算（分类函数早返回）。
     expense_category_enabled: bool = True
+
+    # 企业版许可证路径 (FC_LICENSE_FILE) —— 只被企业版发行包
+    # (fapiao_cn_ee) 解释：指向一份 Ed25519 签名的 JSON 许可证。
+    # 缺失 / 过期 / 签名不合法时**降级成开源版行为**（企业版端点返回
+    # 403，服务本身照常工作），不拒绝启动。
+    #
+    # 这里刻意**没有** FC_EDITION 之类的版本开关：开源版用户改一个
+    # 环境变量就能解锁企业版能力，整套商业边界就作废了。发行版只由
+    # 「装了哪个发行包 + 许可证是否有效」决定。
+    license_file: str = ""
 
 
 settings = Settings()

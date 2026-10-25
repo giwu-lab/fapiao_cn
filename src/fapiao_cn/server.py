@@ -13,7 +13,6 @@ import asyncio
 import logging
 import signal
 import time
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Awaitable, Callable, MutableMapping, Optional
@@ -34,11 +33,20 @@ from fapiao_cn.auth import (
 from fapiao_cn.cache import get_cache
 from fapiao_cn.cache import reload_if_settings_changed as _reload_cache
 from fapiao_cn.config import settings
+from fapiao_cn.editions import (
+    Feature,
+    capabilities_payload,
+    feature_not_available_payload,
+    get_entitlements,
+    require_feature,
+    resolve_entitlements,
+    set_entitlements,
+)
 from fapiao_cn.formats import detect_format, parse_pdf
-from fapiao_cn.input import resolve_batch_input, resolve_input
+from fapiao_cn.input import resolve_input
 from fapiao_cn.parsers import get_format_descriptions
 from fapiao_cn.pipeline import run as run_pipeline
-from fapiao_cn.pipeline import run_customs
+from fapiao_cn.plugins import load_plugin
 from fapiao_cn.schemas import CustomsDeclarationHeader, ExtractResponse, PdfRaw
 from fapiao_cn.utils import truncate as _truncate_msg
 from fapiao_cn.verify import VerifyRequest, verify_invoice
@@ -46,8 +54,9 @@ from fapiao_cn.verify import VerifyRequest, verify_invoice
 log = logging.getLogger("fapiao_cn.server")
 
 # /formats descriptions are sourced from the parser registry (H7)
-# so adding a new parser automatically surfaces here.
-_FORMATS = get_format_descriptions()
+# so adding a new parser automatically surfaces here.  注意这里是
+# **每次请求现取**而不是模块级常量：企业版插件会在运行期往注册表里
+# 注入报关单规则（未授权时再摘掉），模块级快照会漏掉这次变化。
 
 
 def _resolve_app_root() -> Path:
@@ -149,42 +158,47 @@ def _customs_field_schema() -> list:
     ]
 
 
-# ── Batch thread pool (re-created lazily if worker count changes) ──
-_BATCH_POOL: Optional[ThreadPoolExecutor] = None
-_BATCH_POOL_WORKERS: int = 0
+# ── 企业版占位路由 ────────────────────────────────────────────────
+# 开源版里没有 fapiao_cn_ee 发行包，报关单与批量提取**只有路径没有实现**：
+# 路由照样注册（两版路由表一致，客户端不会因为版本差异拿到 404），
+# 但一律返回 403 feature_not_available。真正的实现在企业版发行包里。
+def _register_customs_unavailable(app: FastAPI) -> None:
+    """注册 ``/extract/customs`` 的 403 占位路由。"""
 
-
-def _get_batch_pool(workers: int) -> ThreadPoolExecutor:
-    """Return a singleton pool, recreating it if worker count changed."""
-
-    global _BATCH_POOL, _BATCH_POOL_WORKERS
-    if _BATCH_POOL is None or _BATCH_POOL_WORKERS != workers:
-        if _BATCH_POOL is not None:
-            _BATCH_POOL.shutdown(wait=False)
-        _BATCH_POOL = ThreadPoolExecutor(
-            max_workers=workers, thread_name_prefix="fapiao-cn-batch"
+    @app.post(
+        "/extract/customs",
+        response_model=CustomsDeclarationHeader,
+        dependencies=[
+            Depends(auth_required("extract")),
+            Depends(require_feature(Feature.CUSTOMS)),
+        ],
+        openapi_extra={"x-required-edition": "ee"},
+    )
+    async def extract_customs_unavailable(request: Request):
+        # 依赖 require_feature 会先抛 403；这里是兜底，防止有人绕过依赖
+        # 直接调函数。
+        raise HTTPException(
+            status_code=403,
+            detail=feature_not_available_payload(Feature.CUSTOMS),
         )
-        _BATCH_POOL_WORKERS = workers
-    return _BATCH_POOL
 
 
-def _parse_one(contents: bytes, filename: str) -> ExtractResponse:
-    """Worker entry-point: parse a single invoice, swallow exceptions.
+def _register_batch_unavailable(app: FastAPI) -> None:
+    """注册 ``/extract/batch`` 的 403 占位路由。"""
 
-    Per-file failures must not abort the batch, but the underlying
-    traceback is logged so an operator can investigate (H4).
-    """
-
-    try:
-        return parse_pdf(contents, filename=filename)
-    except Exception as exc:
-        log.exception(
-            "batch worker failed for %s (%d bytes): %s",
-            filename,
-            len(contents),
-            exc,
+    @app.post(
+        "/extract/batch",
+        dependencies=[
+            Depends(auth_required("extract")),
+            Depends(require_feature(Feature.BATCH)),
+        ],
+        openapi_extra={"x-required-edition": "ee"},
+    )
+    async def extract_batch_unavailable(request: Request):
+        raise HTTPException(
+            status_code=403,
+            detail=feature_not_available_payload(Feature.BATCH),
         )
-        return ExtractResponse(file=filename, message=f"error: internal_error: {exc}")
 
 
 # Module-level state for the /health/full readiness probe.
@@ -299,6 +313,26 @@ def create_app() -> FastAPI:
         log.error("API key store failed to load; refusing to start: %s", exc)
         raise
 
+    # ── 发行版 / 能力解析 ─────────────────────────────────────────
+    # 版本**不能**由环境变量决定：开源版用户改一个 FC_EDITION 就能解锁
+    # 企业版能力，整套商业边界就作废。版本只由两件事决定：
+    #   1. 企业版发行包 fapiao_cn_ee 在不在（不在 → 开源版）；
+    #   2. 许可证有效不有效（无效 → 同样降级成开源版行为）。
+    plugin = load_plugin()
+    entitlements = resolve_entitlements(plugin)
+    set_entitlements(entitlements)
+    if plugin is not None:
+        try:
+            plugin.sync_parsers(entitlements.has(Feature.CUSTOMS))
+        except Exception:  # noqa: BLE001 — 插件坏了不能拖垮启动
+            log.exception("failed to sync enterprise parsers; continuing without them")
+    log.info(
+        "edition=%s features=%s license=%s",
+        entitlements.edition.value,
+        ",".join(sorted(f.value for f in entitlements.features)),
+        entitlements.license_id or entitlements.reason or "none",
+    )
+
     # SIGHUP 是 POSIX-only 信号：Windows 上 ``signal.SIGHUP`` 根本不存在，
     # 读取属性本身就会抛 AttributeError（在进入 add_signal_handler 之前），
     # 因此这里必须先探测信号是否存在，而不能只靠捕获 add_signal_handler 的异常。
@@ -325,6 +359,21 @@ def create_app() -> FastAPI:
                     log.info("SIGHUP received; cache size adjusted")
             except Exception as exc:  # noqa: BLE001
                 log.error("SIGHUP reload (cache) failed: %s", exc)
+            # 许可证续期 / 换证：SIGHUP 后立即生效，不用重启容器。
+            if plugin is not None:
+                try:
+                    fresh_ent = resolve_entitlements(plugin)
+                    set_entitlements(fresh_ent)
+                    plugin.sync_parsers(fresh_ent.has(Feature.CUSTOMS))
+                    log.info(
+                        "SIGHUP received; reloaded license "
+                        "(edition=%s features=%s license=%s)",
+                        fresh_ent.edition.value,
+                        ",".join(sorted(f.value for f in fresh_ent.features)),
+                        fresh_ent.license_id or fresh_ent.reason or "none",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.error("SIGHUP reload (license) failed: %s", exc)
 
         if _sighup is not None:
             try:
@@ -407,6 +456,13 @@ def create_app() -> FastAPI:
         from fapiao_cn.parsers import _RULES as _PARSER_RULES  # noqa: PLC0415
         checks["parsers_count"] = len(_PARSER_RULES) + 1  # +1 for the XML parser
         checks["samples_dir_exists"] = (_resolve_app_root() / "samples").is_dir()
+        # 发行版 / 能力：部署形态一眼可见。注意这些是**非布尔**字段，
+        # 不参与就绪判定 —— 许可证无效时正确的行为是降级成 CE 继续服务，
+        # 而不是让容器不健康。
+        ent = get_entitlements()
+        checks["edition"] = ent.edition.value
+        checks["edition_features"] = sorted(f.value for f in ent.features)
+        checks["license_status"] = "active" if ent.license_id else ent.reason
         checks["uptime_seconds"] = int(time.time() - _START_TIME)
         cache_stats = get_cache().stats()
         # H18: warn when the cache hit ratio is suspiciously low.
@@ -452,8 +508,21 @@ def create_app() -> FastAPI:
 
     @app.get("/formats", dependencies=[Depends(auth_required("extract"))])
     def list_formats():
-        """Return the list of supported invoice types."""
-        return {"formats": _FORMATS}
+        """Return the list of supported invoice types.
+
+        现取注册表：企业版插件会在运行期注入/摘除报关单规则，模块级
+        快照会漏掉这次变化。
+        """
+        return {"formats": get_format_descriptions()}
+
+    @app.get("/capabilities")
+    def capabilities():
+        """报告当前发行版与可用能力。
+
+        前端据此显示/隐藏企业版入口（批量提取、报关单解析）——这是
+        「看得见的墙」：用户看得见能力边界，也知道该买什么。
+        """
+        return capabilities_payload()
 
     @app.get(
         "/formats/customs",
@@ -468,38 +537,12 @@ def create_app() -> FastAPI:
         """
         return {"fields": _customs_field_schema()}
 
-    @app.post(
-        "/extract/customs",
-        response_model=CustomsDeclarationHeader,
-        dependencies=[Depends(auth_required("extract"))],
-    )
-    async def extract_customs(request: Request):
-        """Extract fields from a 海关出口货物报关单 PDF.
-
-        Accepts the same input shapes as ``/extract`` (multipart upload,
-        ``url`` / ``file_path`` / ``file_base64`` JSON).  Multi-page
-        出口退税联 declarations accumulate all line items across pages
-        into ``items[]``; merged documents (报关单 + 放行条) parse the
-        报关单 page(s) and silently ignore the 放行条 page.
-        """
-        contents, filename = await resolve_input(request)
-        if contents is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Provide file, url, file_path, or file_base64",
-            )
-        try:
-            rec = run_customs(contents, file_label=filename)
-        except Exception as exc:
-            log.exception("run_customs failed for %s", filename)
-            return JSONResponse(
-                status_code=500,
-                content=CustomsDeclarationHeader(
-                    file=filename,
-                    message=f"error: internal_error: {_truncate_msg(exc)}",
-                ).model_dump(exclude_none=True),
-            )
-        return rec
+    # 报关单解析是企业版能力：插件在 → 注册真实实现；不在 → 注册 403
+    # 占位路由（路径保持一致，客户端不会因为版本差异拿到 404）。
+    if plugin is not None:
+        plugin.register_customs_route(app)
+    else:
+        _register_customs_unavailable(app)
 
     @app.post(
         "/extract",
@@ -542,33 +585,11 @@ def create_app() -> FastAPI:
 
         return resp
 
-    @app.post(
-        "/extract/batch",
-        dependencies=[Depends(auth_required("extract"))],
-    )
-    async def extract_batch(request: Request):
-        """Extract invoice fields from multiple uploaded PDFs.
-
-        Accepts ``multipart/form-data`` with repeated field ``files``.
-        Files are parsed in parallel via a thread pool of size
-        ``settings.batch_workers``; results keep the input order.
-        Individual parse errors land in the ``message`` field of the
-        corresponding item rather than failing the whole request.
-        """
-
-        uploaded, error_msg = await resolve_batch_input(request)
-        if uploaded is None:
-            raise HTTPException(status_code=400, detail=error_msg)
-
-        workers = max(1, settings.batch_workers)
-        pool = _get_batch_pool(workers)
-        loop = asyncio.get_running_loop()
-        futures = [
-            loop.run_in_executor(pool, _parse_one, data, fname)
-            for data, fname in uploaded
-        ]
-        results = await asyncio.gather(*futures)
-        return results
+    # 批量提取同样是企业版能力。
+    if plugin is not None:
+        plugin.register_batch_route(app)
+    else:
+        _register_batch_unavailable(app)
 
     @app.post(
         "/raw",

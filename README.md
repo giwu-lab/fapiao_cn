@@ -126,12 +126,13 @@ print(resp.seller_name, resp.total_amount, resp.message)
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/health` | Liveness probe（公开） |
-| GET | `/health/full` | Readiness probe + 依赖 / 缓存状态（需 `admin` scope） |
+| GET | `/health/full` | Readiness probe + 依赖 / 缓存 / 发行版状态（需 `admin` scope） |
+| GET | `/capabilities` | 当前发行版与可用能力（公开） |
 | GET | `/formats` | 支持的全部票种 |
 | GET | `/formats/customs` | 海关出口货物报关单字段 schema |
 | POST | `/extract` | 单文件提取 |
-| POST | `/extract/customs` | 海关出口货物报关单提取（操作联 / 出口退税联） |
-| POST | `/extract/batch` | 批量提取（并行，按输入顺序返回） |
+| POST | `/extract/customs` | **企业版** — 海关出口货物报关单提取（操作联 / 出口退税联） |
+| POST | `/extract/batch` | **企业版** — 批量提取（并行，按输入顺序返回） |
 | POST | `/raw` | 仅返回 PDF 原始文本，XML/OFD 拒绝 |
 | POST | `/verify` | 国税查验代理（需 `FC_VERIFY_ENABLED=true`） |
 | POST | `/extract-and-verify` | 提取 + 查验一站式 |
@@ -152,6 +153,120 @@ curl -H "Content-Type: application/json" \
 ```
 
 `/extract/batch` 限制：最多 50 个文件、单文件 10 MB（与 `/extract` 一致，由 `FC_MAX_FILE_MB` 统一控制）、总大小 500 MB。
+
+## 发行版：CE（开源版）与 EE（企业版）
+
+本项目分两个**互相独立的发行包**：
+
+| 发行包 | 内容 | 能力 |
+| --- | --- | --- |
+| `fapiao_cn` | 开源版（CE） | 发票 / 客票 / 费用分类 / 查验代理 |
+| `fapiao_cn_ee` | 企业版（EE），依赖 `fapiao_cn==<同版本>` | **报关单解析**（`/extract/customs`）、**批量提取**（`/extract/batch`） |
+
+**商业边界落在发行包上，不是运行时的 if。** CE 的 wheel 里没有报关单解析器，
+CE 的镜像里连 `fapiao_cn_ee` 的字节码都不存在（构建时按 `ARG EDITION` 把
+企业版 wheel 从依赖目录剔除），所以"改一行代码就能解锁"这条路是堵死的。
+
+### 三个正交的维度
+
+| 维度 | 回答什么 | 载体 |
+| --- | --- | --- |
+| `edition` | 装的是什么发行包 | 发行包构成 + 许可证 |
+| `feature` | 这个版本能做哪些事 | 许可证授权的子集 |
+| `scope` | 哪个 API key 能用 | `keys.json` 里的 scopes |
+
+有效权限 = `edition ∩ license ∩ key scope`。**scope 不能当商业边界** ——
+key 是使用者自己配的；`edition` / `license` 才是墙。
+
+### 没有 `FC_EDITION` 这类开关
+
+版本只由两件事决定：**装了哪个发行包** + **许可证是否有效**。刻意不提供
+`FC_EDITION` 环境变量 —— 有了它，开源版用户改一个环境变量就解锁了，
+整套体系作废。
+
+### 许可证
+
+企业版包装了还不够，运行时还要用 `FC_LICENSE_FILE` 指一份 Ed25519 签名的
+JSON 许可证：
+
+```bash
+docker run ... \
+  -e FC_LICENSE_FILE=/app/license.json \
+  -v /path/to/license.json:/app/license.json:ro \
+  fapiao_cn:1.2.2-ee
+```
+
+- 许可证有效 → 开放被授权的能力；
+- 缺失 / 过期 / 签名不合法 → **自动降级成 CE 行为**（企业版端点返回
+  `403 feature_not_available`，其余功能照常，**不拒绝启动**）；
+- `SIGHUP` 可热重载许可证 —— 续期 / 换证不用重启容器。
+
+公钥编译在 `fapiao_cn_ee` 包里（私钥只在签发方手里），签发工具在**企业版
+私有仓库**的 `scripts/sign_license.py`，轮换签发密钥 = 换公钥 + 重签。
+
+### 未授权时的响应
+
+两个版本**路由表一致**（不会因为版本差异拿到 404），未授权时返回结构化 403：
+
+```json
+{
+  "detail": {
+    "error": "feature_not_available",
+    "feature": "customs",
+    "required_edition": "ee",
+    "current_edition": "ce",
+    "reason": "ee_package_absent",
+    "upgrade": "https://example.invalid/upgrade"
+  }
+}
+```
+
+鉴权优先于版本判定：没有 key 的请求先得到 **401**，不会先撞到 403
+（否则等于向未鉴权方泄漏"这是企业版功能"）。
+
+### 前端怎么用
+
+`GET /capabilities`（公开）返回当前能力：
+
+```json
+{
+  "edition": "ce",
+  "features": {"extract": true, "batch": false, "customs": false, "verify": true},
+  "limits": {"max_file_mb": 10, "max_batch_files": 50, "max_batch_total_mb": 500},
+  "license": {"status": "absent", "license_id": "", "customer": "", "expires_at": ""}
+}
+```
+
+前端据此显示/隐藏「批量上传」「报关单解析」入口 —— 用户看得见能力边界，
+也知道该买什么。
+
+### 构建两个版本
+
+企业版源码在**私有仓库** `fapiao_cn_ee`（本仓库不含其任何实现），两个仓库
+各自独立构建：
+
+```bash
+# ① 开源版：直接在本仓库构建
+docker build -t fapiao_cn:1.2.2-ce .
+
+# ② 企业版：在企业版仓库里把 wheel 产出到本仓库的 wheels/
+python ../fapiao_cn_ee/scripts/build_ee_wheel.py \
+    --ce-root . --wheels-dir ./wheels
+docker build --build-arg EDITION=ee -t fapiao_cn:1.2.2-ee .
+```
+
+`build_ee_wheel.py` 不进 wheel（只进 sdist），签发工具与厂商密钥始终留在
+私有仓库这一侧。
+
+### 扩展点
+
+CE ↔ EE 的接缝在 `fapiao_cn.plugins.FapiaoPlugin`：企业版实现
+`entitlements()` / `register_customs_route()` / `register_batch_route()` /
+`sync_parsers()` 四个方法即可。**本仓库是公开的，企业版实现在私有仓库
+`fapiao_cn_ee` 里**，两边靠这个契约对接，契约不用改。
+
+> 完整的签发、部署、续期与排障手册见**企业版私有仓库**里的
+> `AUTHORIZATION.md`（随企业版源码一起分发）。
 
 ## 输出字段
 
@@ -320,9 +435,13 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 
 | Scope | 端点 |
 | --- | --- |
-| `extract` | `/extract`、`/extract/batch`、`/extract/customs`、`/raw`、`/extract-and-verify`、`/formats`、`/formats/customs` |
+| `extract` | `/extract`、`/extract/batch`（企业版）、`/extract/customs`（企业版）、`/raw`、`/extract-and-verify`、`/formats`、`/formats/customs` |
 | `verify` | `/verify` |
 | `admin` | `/health/full`（超集，含 extract / verify） |
+
+> scope 解决"**哪个 key** 能用"，发行版解决"**装的是什么**"。两者独立：
+> CE 里就算 key 带了 `extract` scope 也照样打不开企业版端点（见
+> [发行版](#发行版ce-开源版与-ee-企业版)）。
 
 ### 错误码
 
@@ -330,6 +449,7 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 | --- | --- | --- |
 | 401 | 缺 token / token 错 | `WWW-Authenticate: Bearer realm="fapiao_cn", error="invalid_token"` |
 | 403 | scope 不足 | `WWW-Authenticate: Bearer realm="fapiao_cn", error="insufficient_scope"` |
+| 403 | 发行版能力未授权 | `{"detail": {"error": "feature_not_available", "feature": "...", "required_edition": "ee"}}` |
 | 429 | 限速 | `Retry-After: <sec>` + `WWW-Authenticate: ... error="rate_limited"` |
 
 `/health` 始终公开，不消耗配额。`FC_API_KEYS` 与 `FC_API_KEYS_FILE` 都为空 → 启动 WARN + 全量放行（dev 兜底，**生产前必须显式配置**）。
@@ -392,6 +512,7 @@ environment:
 | `FC_CORS_ALLOW_METHODS` | `GET,POST,OPTIONS` | CORS 允许方法 |
 | `FC_CORS_ALLOW_HEADERS` | `Content-Type,Authorization` | CORS 允许请求头 |
 | `FC_EXPENSE_CATEGORY_ENABLED` | `true` | 消费类别分类总开关；false 时三字段恒为空字符串 |
+| `FC_LICENSE_FILE` | （空） | 企业版许可证路径（JSON，Ed25519 签名）。只被 `fapiao_cn_ee` 解释；缺失/过期/签名不合法时**降级成开源版行为**。**没有 `FC_EDITION` 之类的版本开关** —— 改环境变量不能解锁企业版 |
 
 ## 测试
 
@@ -399,6 +520,10 @@ environment:
 fapiao_cn test                              # 控制台脚本
 python -m pytest tests/ -v                  # 直接 pytest
 ```
+
+> 企业版相关用例（报关单解析、批量提取）带 `skipif` 标记：装了
+> `fapiao_cn_ee` **且**提供了有效许可证才会跑。开源版 CI 跑不到企业版
+> 代码，企业版 CI 才跑得到。
 
 219 条用例覆盖 `samples/` 下 41 个样本（34 PDF + 5 XML + 2 OFD）。
 

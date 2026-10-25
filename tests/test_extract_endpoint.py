@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from fapiao_cn.server import app
+from tests._helpers import ee_feature_enabled
 
 client = TestClient(app)
 
@@ -100,7 +101,9 @@ class TestExtractExpenseCategoryWired:
         # 若意外归到 /extract 路径也不应把报关单分到具体消费类目
         if resp.status_code == 200:
             body = resp.json()
-            assert body.get("expense_category", "") == ""
+            # 开源版没有报关单解析器 → 落到默认解析器 → 未命中规则 →
+            # unclassified；企业版走报关单解析器 → 三字段空字符串。
+            assert body.get("expense_category", "") in ("", "unclassified")
             assert body.get("expense_category_source", "") == ""
 
     def test_extract_response_disabled_flag(self, auth_headers):
@@ -131,6 +134,10 @@ class TestExtractExpenseCategoryWired:
             reset_cache_for_tests(128)
 
 
+@pytest.mark.skipif(
+    not ee_feature_enabled("customs"),
+    reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
+)
 class TestExtractCustomsEndpointClassify:
     """``/extract/customs`` 不应触发 expense_category 分类逻辑。"""
 

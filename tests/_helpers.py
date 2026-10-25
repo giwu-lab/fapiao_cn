@@ -13,10 +13,32 @@ import pdfplumber
 from fapiao_cn.parsers import dispatch
 from fapiao_cn.parsers.ofd_invoice import parse_ofd_invoice
 from fapiao_cn.parsers.xml_invoice import parse_xml_invoice
-from fapiao_cn.pipeline import _aggregate, _clean_text, run_customs
+from fapiao_cn.pipeline import _aggregate, _clean_text
 from fapiao_cn.schemas import CustomsDeclarationHeader, InvoiceRecord
 
 TEST_DIR = Path(__file__).resolve().parent.parent / "samples"
+
+
+def ee_feature_enabled(feature_name: str) -> bool:
+    """企业版能力在当前测试进程里是否可用。
+
+    可用 = 装了 ``fapiao_cn_ee`` 发行包 **且** 许可证有效。报关单解析、
+    批量提取这些能力不在开源版里，所以相关测试要按这个结果跳过 ——
+    开源版的 CI 跑不到企业版代码，企业版的 CI（装了包 + 发了许可证）
+    才能跑到。
+    """
+    from fapiao_cn.editions import Feature, get_entitlements, resolve_entitlements
+    from fapiao_cn.plugins import load_plugin
+
+    ent = get_entitlements()
+    if ent.reason == "not_initialized":
+        # 还没解析过（例如只收集了部分模块）—— 现场解析一次。
+        ent = resolve_entitlements(load_plugin())
+    try:
+        feature = Feature(feature_name)
+    except ValueError:
+        return False
+    return ent.has(feature)
 
 
 def parse_pdf(filename: str) -> InvoiceRecord:
@@ -50,7 +72,12 @@ def parse_pdf(filename: str) -> InvoiceRecord:
 
 
 def parse_customs_pdf(filename: str) -> CustomsDeclarationHeader:
-    """Parse a 海关出口货物报关单 PDF through the customs pipeline."""
+    """Parse a 海关出口货物报关单 PDF through the customs pipeline.
+
+    报关单解析是企业版能力，实现随 ``fapiao_cn_ee`` 发行包发布，不在
+    开源版里 —— 所以这里延迟导入，缺包时由调用方的 skip 标记兜住。
+    """
+    from fapiao_cn_ee.customs import run_customs
 
     path = str(TEST_DIR / filename)
     with open(path, "rb") as f:

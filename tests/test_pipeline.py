@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests._helpers import parse_pdf
+from tests._helpers import ee_feature_enabled, parse_pdf
 
 
 class TestKnownInvoices:
@@ -31,6 +31,10 @@ class TestKnownInvoices:
         assert "售" not in record.buyer_name
 
 
+@pytest.mark.skipif(
+    not ee_feature_enabled("customs"),
+    reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
+)
 class TestKnownCustomsDeclarations:
     """Parametrized over every 海关出口货物报关单 PDF in ``samples/报关单/``
     with stable expected fields."""

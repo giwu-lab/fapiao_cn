@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from fapiao_cn.config import settings
 from fapiao_cn.server import app
+from tests._helpers import ee_feature_enabled
 
 client = TestClient(app)
 
@@ -155,7 +156,12 @@ class TestFormats:
         assert "formats" in data
         assert "new" in data["formats"]
         assert "airline" in data["formats"]
-        assert "customs_declaration" in data["formats"]
+        # 报关单解析是企业版能力：开源版的格式表里没有它，
+        # 装了企业版包且许可证有效时才有。
+        if ee_feature_enabled("customs"):
+            assert "customs_declaration" in data["formats"]
+        else:
+            assert "customs_declaration" not in data["formats"]
 
 
 class TestCustomsFormats:
@@ -189,6 +195,10 @@ class TestCustomsFormats:
             assert required in names, f"missing field {required}"
 
 
+@pytest.mark.skipif(
+    not ee_feature_enabled("customs"),
+    reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
+)
 class TestExtractCustoms:
     """End-to-end tests for ``/extract/customs``."""
 

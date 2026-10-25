@@ -14,6 +14,13 @@ WORKDIR /build
 
 COPY wheels /wheels
 
+# 发行版选择：ce = 开源版，ee = 企业版。
+# ce 构建时把企业版 wheel 从 /wheels 里剔掉 —— runtime 阶段从 /wheels
+# 安装依赖，剔掉之后 CE 镜像里连 fapiao_cn_ee 的字节码都没有，
+# 商业边界落在**发行包**上，而不是运行时的 if。
+ARG EDITION=ce
+RUN if [ "$EDITION" != "ee" ]; then rm -f /wheels/fapiao_cn_ee-*.whl; fi
+
 # 可选：切换 pip 镜像源（默认阿里云）。传 --build-arg PIP_INDEX_URL= 走官方源。
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
@@ -91,9 +98,18 @@ COPY --from=builder /wheels /wheels
 # 装运行时依赖 + 项目本体（本地 wheel，不联网）
 # /wheels 里的依赖在离线模式来自主机预置、在在线模式来自 builder 的
 # pip download —— 两条路到这里都已经是 wheel，所以这里恒为离线安装。
+#
+# EDITION=ee 时额外安装企业版发行包 fapiao_cn_ee（报关单解析 / 批量提取）。
+# 注意：企业版**光装了包还不够** —— 运行时还要用 FC_LICENSE_FILE 挂进
+# 一份有效许可证，否则服务自动降级成开源版行为（企业版端点返回 403，
+# 其余功能照常）。
+ARG EDITION=ce
 RUN pip install --no-cache-dir --no-index --find-links=/wheels \
         pdfplumber fastapi 'uvicorn>=0.30' pydantic pydantic-settings python-multipart httpx pyyaml defusedxml \
     && pip install --no-cache-dir --no-index --no-deps --find-links=/wheels fapiao_cn \
+    && if [ "$EDITION" = "ee" ]; then \
+         pip install --no-cache-dir --no-index --no-deps --find-links=/wheels fapiao_cn_ee; \
+       fi \
     && rm -rf /wheels
 
 ENV FC_HOST=0.0.0.0 \

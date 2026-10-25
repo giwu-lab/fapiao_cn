@@ -19,8 +19,7 @@ import pdfplumber
 from fapiao_cn.config import settings
 from fapiao_cn.expense_category import classify_expense
 from fapiao_cn.parsers import dispatch
-from fapiao_cn.parsers.customs_declaration import parse_customs_declaration
-from fapiao_cn.schemas import CustomsDeclarationHeader, InvoiceRecord, PdfRaw
+from fapiao_cn.schemas import InvoiceRecord, PdfRaw
 from fapiao_cn.utils import normalize_lines
 
 if TYPE_CHECKING:
@@ -169,171 +168,18 @@ def run(contents: bytes, *, with_raw: bool = False) -> ParseResult:
     return ParseResult(record=record, pdf_raw=pdf_raw, message="success")
 
 
-# ── Customs declaration (报关单) pipeline ──
-#
-# Mirrors ``run`` but produces a ``CustomsDeclarationHeader``.  The
-# per-page guard inside ``parse_customs_declaration`` returns an empty
-# record for any non-报关单 page (e.g. 放行条 in merged documents), so
-# pages where the title is absent contribute nothing to the aggregate.
-#
-# Multi-page 出口退税联 (e.g. 24 items across 6 pages) gets ``full_text``
-# injected into ``ctx`` so the parser can scan every page's items in a
-# single pass and return a complete ``items[]`` on each per-page record.
-# The aggregator then dedupes items by ``(item_no, hs_code, total_price)``
-# so the same item emitted on every page survives exactly once.
-
-_CUSTOMS_RECORDS_FIELDS = (
-    "declaration_variant",
-    "direction",
-    "customs_no",
-    "pre_entry_no",
-    "record_no",
-    "export_date",
-    "declaration_date",
-    "print_date",
-    "shipper_name",
-    "shipper_tax_id",
-    "consignee_name",
-    "consignee_tax_id",
-    "producer_name",
-    "producer_tax_id",
-    "declarant_name",
-    "declarant_tax_id",
-    "customs_office_code",
-    "customs_office_name",
-    "transport_mode",
-    "transport_mode_code",
-    "vessel_or_flight",
-    "bill_of_lading_no",
-    "supervision_mode_code",
-    "supervision_mode_name",
-    "tax_exemption_code",
-    "tax_exemption_name",
-    "settlement_method",
-    "license_no",
-    "approval_no",
-    "contract_no",
-    "trade_country_code",
-    "trade_country_name",
-    "destination_country_code",
-    "destination_country_name",
-    "destination_port_code",
-    "destination_port_name",
-    "exit_port_code",
-    "exit_port_name",
-    "source_region_code",
-    "source_region_name",
-    "package_type_code",
-    "package_type_name",
-    "packages_count",
-    "gross_weight_kg",
-    "net_weight_kg",
-    "trade_term_code",
-    "trade_term_name",
-    "freight",
-    "insurance",
-    "misc_charges",
-    "attached_docs",
-    "container_no",
-    "container_summary",
-    "marks_and_remarks",
-    "declarant_person",
-    "declarant_person_id",
-    "declarant_phone",
-    "currency",
-    "total_amount",
-)
+# 报关单（海关出口货物报关单）解析**不在本模块**：它是企业版能力，实现随
+# fapiao_cn_ee 发行包发布（见 fapiao_cn.plugins 的插件契约）。这里只保留
+# 页面加载的公开入口，供企业版插件复用同一套页面视图与文本清洗逻辑。
 
 
-def run_customs(contents: bytes, *, file_label: str = "") -> CustomsDeclarationHeader:
-    """Run the customs declaration parser across all pages and return a
-    single ``CustomsDeclarationHeader`` aggregated from per-page
-    results.
+def load_pages(contents: bytes) -> List[PageView]:
+    """打开 PDF 并返回页面视图列表。
 
-    The function returns an empty record when the PDF does not look like
-    a 报关单 at all; callers can detect this via
-    ``record.customs_no == ""``.
+    企业版的报关单 pipeline 需要同样的页面视图（同一套文本清洗、同样
+    的懒加载 words），所以把内部实现公开出来，避免两个包各写一份。
     """
-
-    pages = _load_pages(contents)
-    if not pages or all(not p.text for p in pages):
-        rec = CustomsDeclarationHeader()
-        rec.page_count = len(pages)
-        rec.message = "not_text"
-        rec.file = file_label
-        return rec
-
-    full_text = "\n".join(p.text for p in pages)
-
-    per_page_records = [
-        parse_customs_declaration(
-            page.text,
-            {
-                "page_index": i,
-                "parser_name": "customs_declaration",
-                "page": page,
-                "full_text": full_text,
-                "page_count": len(pages),
-            },
-        )
-        for i, page in enumerate(pages)
-    ]
-
-    return _summarize_customs(per_page_records, page_count=len(pages), file_label=file_label)
-
-
-def _summarize_customs(
-    records: List[CustomsDeclarationHeader],
-    *,
-    page_count: int,
-    file_label: str,
-) -> CustomsDeclarationHeader:
-    """Aggregate per-page ``CustomsDeclarationHeader`` records.
-
-    String fields use ``first_non_empty`` (headers repeat on every
-    page).  ``items`` are de-duped by ``(item_no, hs_code, total_price)``
-    — each per-page record carries the same full list (extracted from
-    ``full_text``), so dedup by natural key keeps one entry per logical
-    item across multi-page 退税联 declarations.  ``total_amount`` is
-    pulled from the first non-empty record (every page emits the same
-    cumulative total since it is derived from ``full_text``).
-    """
-
-    out = CustomsDeclarationHeader()
-    out.page_count = page_count
-    out.file = file_label
-
-    def first_non_empty(field: str) -> str:
-        for r in records:
-            v = getattr(r, field, "")
-            if v:
-                return v
-        return ""
-
-    for field in _CUSTOMS_RECORDS_FIELDS:
-        setattr(out, field, first_non_empty(field))
-
-    seen: set = set()
-    merged_items: List = []
-    for r in records:
-        for it in r.items:
-            key = (it.item_no, it.hs_code, it.total_price)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged_items.append(it)
-    out.items = merged_items
-    out.item_count = len(merged_items)
-
-    # Re-derive total_amount from merged items across the whole PDF.
-    try:
-        total = sum(float(t.total_price or 0) for t in merged_items)
-        if total > 0:
-            out.total_amount = f"{total:.2f}"
-    except ValueError:
-        pass
-
-    return out
+    return _load_pages(contents)
 
 
 def _aggregate(records: list, file_label: str, page_count: int) -> InvoiceRecord:
