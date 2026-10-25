@@ -12,7 +12,7 @@
 镜像特性：多阶段 `python:3.12-slim`、非 root、HEALTHCHECK 内置、`/app/logs` volume 挂载、时区 `Asia/Shanghai`、镜像 < 250 MB。Dockerfile 默认走国内 APT 镜像（`APT_MIRROR=mirrors.aliyun.com`），需要切回官方源：
 
 ```bash
-docker build --build-arg APT_MIRROR= -t fapiao_cn:1.0.0 .
+docker build --build-arg APT_MIRROR= -t fapiao_cn:1.0.0-ce .
 ```
 
 ### 构建方案
@@ -31,7 +31,7 @@ Dockerfile 会自动判断走哪条，**两条路都不需要改 Dockerfile**：
 bash scripts/prepare_wheels.sh           # 等价于 pip wheel --wheel-dir=wheels <deps>
 # 或指定 PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ bash scripts/prepare_wheels.sh
 
-docker build -t fapiao_cn:1.0.0 .
+docker build -t fapiao_cn:1.0.0-ce .
 ```
 
 > wheels/ 不用每次都重生成；只有锁定依赖版本时才需要重跑。脚本会自动用 `.venv/bin/python3`（如有）或系统 `python3`。
@@ -41,7 +41,7 @@ docker build -t fapiao_cn:1.0.0 .
 
 ```bash
 docker buildx create --use --driver docker-container --network host   # 一次性建 host 网络 builder
-docker buildx build -t fapiao_cn:1.0.0 .                               # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
+docker buildx build -t fapiao_cn:1.0.0-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
 ```
 
 **方案 C：完全离线**（路线 1 失败 + 上面共享网络也没法用时）—— 在主机上准备好 wheels **和** 基础 deb 包（apt-offline 工具链），用本地 deb 仓库喂给镜像。绝大多数情况下路线 1 + 共享网络已够用，此处不展开。
@@ -129,7 +129,7 @@ print(resp.seller_name, resp.total_amount, resp.message)
 | GET | `/health/full` | Readiness probe + 依赖 / 缓存 / 发行版状态（需 `admin` scope） |
 | GET | `/capabilities` | 当前发行版与可用能力（公开） |
 | GET | `/formats` | 支持的全部票种 |
-| GET | `/formats/customs` | 海关出口货物报关单字段 schema |
+| GET | `/formats/customs` | 海关出口货物报关单字段 schema（**两版共有的响应契约**，只有企业版能实际解析报关单） |
 | POST | `/extract` | 单文件提取 |
 | POST | `/extract/customs` | **企业版** — 海关出口货物报关单提取（操作联 / 出口退税联） |
 | POST | `/extract/batch` | **企业版** — 批量提取（并行，按输入顺序返回） |
@@ -249,7 +249,7 @@ docker run ... \
 # ① 开源版：直接在本仓库构建
 docker build -t fapiao_cn:1.0.0-ce .
 
-# ② 企业版：在企业版仓库里把 wheel 产出到本仓库的 wheels/
+# ② 企业版：在企业版仓库（与本仓库同级检出）里把 wheel 产出到本仓库的 wheels/
 python ../fapiao_cn_ee/scripts/build_ee_wheel.py \
     --ce-root . --wheels-dir ./wheels
 docker build --build-arg EDITION=ee -t fapiao_cn:1.0.0-ee .
@@ -522,12 +522,17 @@ python -m pytest tests/ -v                  # 直接 pytest
 ```
 
 > 企业版相关用例（报关单解析、批量提取）带 `skipif` 标记：装了
-> `fapiao_cn_ee` **且**提供了有效许可证才会跑。开源版 CI 跑不到企业版
-> 代码，企业版 CI 才跑得到。
+> `fapiao_cn_ee` **且**提供了有效许可证才会跑。公开 CI 只跑 lint + 类型检查
+> + Docker 冒烟（真实票据样本与完整用例集在私有验证环境，不入公开仓库）；
+> 企业版自身的用例在**企业版仓库**里单独运行。
 
-219 条用例覆盖 `samples/` 下 41 个样本（34 PDF + 5 XML + 2 OFD）。
+开源版 **464** 条用例通过（76 skipped / 2 xfailed）；装上企业版包并提供有效
+许可证后 **509** 条通过（31 skipped）；企业版仓库另有 **23** 条许可证与插件
+专项测试。样本共 41 个（34 PDF + 5 XML + 2 OFD）。
 
-> `samples/` 按票种子目录组织：`新电子发票-标准/` / `新电子发票-旧格式/` / `成品油合并代码/` / `铁路电子客票/` / `航空运输电子客票/` / `中央非税收入统一票据/` / `报关单/` / `全电发票-XML/` / `全电发票-OFD/`。完整归类表见 [`samples/SAMPLES_INDEX.md`](samples/SAMPLES_INDEX.md)（由 `scripts/sync_samples_layout.py --regen-index` 自动维护）。
+> `samples/` 按票种子目录组织：`新电子发票-标准/` / `新电子发票-旧格式/` / `成品油合并代码/` / `铁路电子客票/` / `航空运输电子客票/` / `中央非税收入统一票据/` / `报关单/` / `全电发票-XML/` / `全电发票-OFD/`。
+> **样本目录不在公开仓库里**（`.gitignore` 排除，避免真实票据外泄），归类表
+> 由 `scripts/sync_samples_layout.py --regen-index` 在本地生成。
 
 ## 解析器
 
@@ -539,8 +544,10 @@ python -m pytest tests/ -v                  # 直接 pytest
 | `parsers/airline_ticket.py` | 航空运输电子客票行程单 |
 | `parsers/train_ticket.py` | 铁路电子客票 |
 | `parsers/non_tax_receipt.py` | 中央非税收入统一票据（专利年费等） |
-| `parsers/customs_declaration.py` | 海关出口货物报关单（操作联 / 出口退税联；多页合并时只取报关单页） |
 | `parsers/xml_invoice.py` | XML 全电发票（`EInvoice` schema） |
 | `parsers/ofd_invoice.py` | OFD 全电票 (GB/T 33190，结构化 `CustomTag.xml` + 布局兜底) |
 
 > ⚠️ **H43: XML schema 同步责任**:`parsers/xml_invoice.py` 通过 `defusedxml.ElementTree` 解析 XML 文档,字段名（如 `SellerInformation/SellerName`、`BasicInformation/TotalTax-includedAmount`）与发票平台当前的 ``EInvoice`` schema **硬编码对应**。若国家税务总局 / 发票平台升级 schema（命名空间 URI 变化、字段重命名等）需要手动同步本文件（同时影响 `parsers/ofd_invoice.py`,因为 OFD 内部嵌入的 `<EInvoice>` 复用同一 schema）。建议在升级前先跑一次 XML/OFD 样本回归。
+
+> 📦 **报关单解析器不在本表里**：`parsers/customs_declaration.py` 已下沉到企业版发行包
+> `fapiao_cn_ee`（私有仓库），开源版不含其任何实现 —— 见上方「发行版」章节。

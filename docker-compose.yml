@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: fapiao_cn:1.0.0
+    image: fapiao_cn:1.0.0-ce
     container_name: fapiao_cn
     restart: unless-stopped
     ports:
