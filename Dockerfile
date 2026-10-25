@@ -99,11 +99,18 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels \
 ENV FC_HOST=0.0.0.0 \
     FC_PORT=8091 \
     FC_APP_ROOT=/app \
+    FC_APP_USER=fapiao_cn \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Shanghai
 
-USER fapiao_cn
+# 入口需要 root：宿主 bind mount 过来的 /app/logs 在 Linux 上通常是
+# root:root 0755，必须先把日志目录和已存在的日志文件一起 chown 给应用
+# 用户，否则 audit 日志 handler 在 uvicorn 启动阶段就打不开文件
+# （PermissionError → ValueError: Unable to configure handler 'audit_file'），
+# 容器直接退出。scripts/entrypoint.sh 随后用 setpriv 降权回 fapiao_cn 再
+# 启动 uvicorn；降权手段不可用时它会明确失败，而不是以 root 跑服务。
+USER root
 EXPOSE 8091
 
 COPY --chown=fapiao_cn:fapiao_cn deploy/log_config.yaml /app/log_config.yaml
