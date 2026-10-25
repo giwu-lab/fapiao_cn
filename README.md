@@ -193,7 +193,7 @@ JSON 许可证：
 docker run ... \
   -e FC_LICENSE_FILE=/app/license.json \
   -v /path/to/license.json:/app/license.json:ro \
-  fapiao_cn:1.2.2-ee
+  fapiao_cn:1.0.0-ee
 ```
 
 - 许可证有效 → 开放被授权的能力；
@@ -247,12 +247,12 @@ docker run ... \
 
 ```bash
 # ① 开源版：直接在本仓库构建
-docker build -t fapiao_cn:1.2.2-ce .
+docker build -t fapiao_cn:1.0.0-ce .
 
 # ② 企业版：在企业版仓库里把 wheel 产出到本仓库的 wheels/
 python ../fapiao_cn_ee/scripts/build_ee_wheel.py \
     --ce-root . --wheels-dir ./wheels
-docker build --build-arg EDITION=ee -t fapiao_cn:1.2.2-ee .
+docker build --build-arg EDITION=ee -t fapiao_cn:1.0.0-ee .
 ```
 
 `build_ee_wheel.py` 不进 wheel（只进 sdist），签发工具与厂商密钥始终留在

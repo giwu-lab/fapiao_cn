@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8091
     title: str = "fapiao_cn"
-    version: str = "1.2.2"
+    version: str = "1.0.0"
 
     # pdfplumber does not render PDF to images; keep for future OCR fallback.
     # /extract 与 /extract/batch 共用这一个上限，调大它等于同时放宽两个入口。
