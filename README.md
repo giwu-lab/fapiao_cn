@@ -174,6 +174,28 @@ curl -H "X-API-Key: $KEY" \
 限额与 `/extract/batch` 相同（最多 50 个、单文件 10 MB、总 500 MB），并发由
 `FC_BATCH_WORKERS` 控制。
 
+每条明细（`items[]`）的字段与票面列的对应关系：
+
+| 字段 | 票面列 |
+| --- | --- |
+| `item_no` | 项号 / 商品序号 |
+| `hs_code` | 商品编号（HS 编码，10 位） |
+| `name_and_spec` | 商品名称及规格型号（`品名\|规格型号`，规格在票面**折行处直接接续**） |
+| `legal_qty` | 法定数量 + 法定单位 |
+| `second_qty` | 第二数量 + 第二单位 |
+| `declared_qty` | 申报数量 + 申报单位（操作联上为成交数量） |
+| `unit_price` / `total_price` | 单价 / 总价 |
+| `currency_code` / `currency_name` | 币制代码（`USD`）/ 币制名（`美元`） |
+| `origin_country_code` / `origin_country_name` | 原产国（地区）代码 / 名称 |
+| `final_destination_code` / `final_destination_name` | 最终目的国（地区）代码 / 名称 |
+| `source_region_code` / `source_region_name` | 境内货源地代码 / 名称 |
+| `tax_status` | 征免（照章征税 / 全免 …） |
+
+两种版式的明细表列并不相同 —— **出口退税联**没有原产国 / 货源地 / 征免列
+（对应字段为空）；**操作联**没有法定数量与申报数量的分列标签，「数量及单位」
+一格里可能同时印着法定数量、第二数量与成交数量，解析时按「单价 × 数量 =
+总价」认出成交数量。
+
 > ⚠️ **1.1.0 破坏性变更**：报关单端点从 `POST /extract/customs`（单文件、返回
 > 对象）改成了 `POST /customs/batch`（多文件、返回数组）。旧的
 > `/extract/customs` **已不存在**（请求它得到 404）。迁移：URL 换成

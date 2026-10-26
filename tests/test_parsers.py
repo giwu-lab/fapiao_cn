@@ -1101,7 +1101,10 @@ Page 1 of 1 打印日期：2026-05-26
         # Item 1 total price
         assert rec.items[0].hs_code == "8483109090"
         assert rec.items[0].total_price == "1883.7"
-        assert rec.items[0].currency_name == "USD"
+        # 币制：票面「币制」格里代码与名称各占一行，代码进 currency_code、
+        # 中文名进 currency_name
+        assert rec.items[0].currency_code == "USD"
+        assert rec.items[0].currency_name == "美元"
         assert rec.items[1].hs_code == "8708409990"
         assert rec.items[1].total_price == "893.7"
         # Cumulative total (USD 原值)
@@ -1131,6 +1134,106 @@ Page 1 of 1 打印日期：2026-05-26
         assert all(
             "摩托车发动机" in (it.name_and_spec or "") or it.hs_code for it in rec.items
         )
+
+
+@pytest.mark.skipif(
+    not ee_feature_enabled("customs"),
+    reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
+)
+class TestCustomsItemFields:
+    """报关单明细字段必须各自落到对应的列，不能一股脑塞进 ``name_and_spec``。
+
+    两种版式的明细表结构完全不同：
+
+    * **出口退税联** —— 行内带表内标签（``法定数量/法定单位``、
+      ``第二数量/第二单位``、``申报数量/申报单位``），按标签切分。
+    * **操作联** —— 没有表内标签，只能按列的位置还原；「数量及单位」格里
+      可能同时印着法定数量、第二数量和成交数量。
+
+    之前的实现只按 token 位置猜，整行（含表内标签）都被当成品名塞进
+    ``name_and_spec``，而法定数量 / 原产国 / 货源地 / 征免等列全空。
+    """
+
+    def _parse(self, text: str):
+        from fapiao_cn_ee.customs_declaration import parse_customs_declaration
+
+        return parse_customs_declaration(
+            text,
+            {"page_index": 0, "parser_name": "customs_declaration", "full_text": text},
+        )
+
+    def test_refund_item_columns(self):
+        """出口退税联：表内标签决定每个值落在哪一列。"""
+        rec = self._parse(TestCustomsDeclaration.REFUND_TEXT)
+        it = rec.items[0]
+        assert it.item_no == "1"
+        assert it.hs_code == "8483109090"
+        assert it.legal_qty == "210个"
+        assert it.second_qty == "325.5千克"
+        assert it.declared_qty == "210个"
+        assert it.unit_price == "8.97"
+        assert it.total_price == "1883.7"
+        assert it.currency_code == "USD"
+        assert it.currency_name == "美元"
+        assert it.final_destination_code == "502"
+        assert it.final_destination_name == "美国"
+        # 退税联的明细表没有原产国 / 货源地 / 征免列
+        assert it.origin_country_code == ""
+        assert it.origin_country_name == ""
+        assert it.source_region_code == ""
+        assert it.tax_status == ""
+
+    def test_operational_item_columns(self):
+        """操作联：没有表内标签，靠列的位置还原。"""
+        rec = self._parse(TestCustomsDeclaration.OPERATIONAL_TEXT)
+        it = rec.items[0]
+        assert it.hs_code == "8483900090"
+        assert it.legal_qty == "4333千克"
+        # 成交数量 = 单价 × 数量 = 总价 能对上的那个
+        assert it.declared_qty == "5000个"
+        assert it.unit_price == "5.71"
+        assert it.total_price == "28550"
+        assert it.currency_name == "美元"
+        assert it.origin_country_code == "CHN"
+        assert it.origin_country_name == "中国"
+        assert it.final_destination_code == "IDN"
+        assert it.final_destination_name == "印度尼西亚"
+        assert it.source_region_code == "50069"
+        assert it.source_region_name == "沙坪坝区"
+        assert it.tax_status == "照章征税"
+
+    def test_spec_has_no_form_labels(self):
+        """规格型号里不能混进表内标签，也不能把表尾吞进来。"""
+        for text in (
+            TestCustomsDeclaration.REFUND_TEXT,
+            TestCustomsDeclaration.OPERATIONAL_TEXT,
+        ):
+            rec = self._parse(text)
+            assert rec.items
+            for it in rec.items:
+                for bad in ("法定数量", "第二数量", "申报数量", "Page ", "打印日期"):
+                    assert bad not in it.name_and_spec, (bad, it.name_and_spec)
+                # 「件号|序号|」前缀必须剥掉
+                spec = it.name_and_spec.split("|", 1)[1] if "|" in it.name_and_spec else ""
+                head = spec.split("|")
+                assert not (len(head) >= 3 and head[0].isdigit() and head[1].isdigit()), spec
+
+    def test_spec_wrap_is_joined_without_separator(self):
+        """折行处直接接续 —— 票面自带的 ``|`` 是数据，折行符不是。"""
+        rec = self._parse(TestCustomsDeclaration.REFUND_TEXT)
+        assert rec.items[0].name_and_spec == "初级输出轴|将发动机的动力传递给车轮，使汽车产生"
+
+    def test_item_total_keeps_integer_prices(self):
+        """整数总价（``1686``）也是总价 —— 不能被漏掉或错当成单价。
+
+        旧实现的金额正则要求必须有小数点，整数总价会被当成单价，导致
+        整张报关单的金额合计算错。
+        """
+        text = TestCustomsDeclaration.OPERATIONAL_TEXT.replace("28550", "1686")
+        rec = self._parse(text)
+        assert rec.items[0].unit_price == "5.71"
+        assert rec.items[0].total_price == "1686"
+        assert rec.total_amount == "28786.00"
 
 
 class TestExpenseCategorySamples:

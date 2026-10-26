@@ -90,6 +90,100 @@ class TestKnownCustomsDeclarations:
         assert rec.declaration_variant in ("操作联", "出口退税联")
 
 
+@pytest.mark.skipif(
+    not ee_feature_enabled("customs"),
+    reason="企业版能力：需要安装 fapiao_cn_ee 并提供有效许可证",
+)
+class TestCustomsItemFieldsFromSamples:
+    """真实样本的明细字段断言 —— 每一条都对着票面逐列核对过。"""
+
+    def _items(self, name: str):
+        from tests._helpers import parse_customs_pdf
+
+        rec = parse_customs_pdf(f"报关单/{name}")
+        assert rec.items, name
+        return rec.items
+
+    def test_refund_item_fields(self):
+        """出口退税联：标签列 + 目的国 + 币制。"""
+        items = self._items("L20260602000010_0429.pdf")
+        it = items[0]
+        assert it.item_no == "1"
+        assert it.hs_code == "8483109090"
+        assert it.name_and_spec == "初级输出轴|将发动机的动力传递给车轮，使汽车产生驱动力|无"
+        assert it.legal_qty == "210个"
+        assert it.second_qty == "325.5千克"
+        assert it.declared_qty == "210个"
+        assert it.unit_price == "8.97"
+        assert it.total_price == "1883.7"
+        assert it.currency_code == "USD"
+        assert it.currency_name == "美元"
+        assert it.final_destination_code == "502"
+        assert it.final_destination_name == "美国"
+
+    def test_operational_item_fields(self):
+        """操作联：原产国 / 最终目的国 / 境内货源地 / 征免。"""
+        items = self._items("L20260626000009_BGD_SNKO020260509798.pdf")
+        it = items[0]
+        assert it.hs_code == "8483900090"
+        assert it.name_and_spec.startswith("离合器外罩|")
+        assert it.legal_qty == "4333千克"
+        assert it.declared_qty == "5000个"  # 5.71 × 5000 = 28550
+        assert it.unit_price == "5.71"
+        assert it.total_price == "28550"
+        assert it.currency_name == "美元"
+        assert it.origin_country_code == "CHN"
+        assert it.origin_country_name == "中国"
+        assert it.final_destination_code == "IDN"
+        assert it.final_destination_name == "印度尼西亚"
+        assert it.source_region_code == "50069"
+        assert it.source_region_name == "沙坪坝区"
+        assert it.tax_status == "照章征税"
+
+    def test_merged_document_item_fields(self):
+        """报关单 + 放行条合并件：明细只来自报关单那一页。"""
+        items = self._items("L20260528000009_21708433876_报关单放行条合并文档(1).pdf")
+        assert len(items) == 1
+        it = items[0]
+        assert it.hs_code == "7318151001"
+        assert it.name_and_spec == "圆柱螺栓|钢|1177-1324Mpa兆帕|无品牌|无型号|6.4±0.1mm"
+        assert it.legal_qty == "236.8千克"
+        assert it.declared_qty == "7400个"  # 0.2626 × 7400 = 1943.24
+        assert it.total_price == "1943.24"
+
+    def test_no_item_swallows_form_footer(self):
+        """最后一条明细不能把表尾（签字 / 审单 / 打印日期）吞进规格型号。"""
+        for name in (
+            "L20260602000010_0429.pdf",
+            "L20260625000008_0522.pdf",
+            "L20260626000009_BGD_SNKO020260509798.pdf",
+            "L20260901000001_SHSL60355800_bgd.pdf",
+        ):
+            for it in self._items(name):
+                for bad in ("Page ", "打印日期", "税费征收情况", "录入员", "报关人员"):
+                    assert bad not in it.name_and_spec, (name, bad, it.name_and_spec)
+
+    def test_item_price_times_qty_matches_total(self):
+        """成交数量 × 单价 必须等于总价（数量归位错了就会对不上）。"""
+        for name in (
+            "L20260602000010_0429.pdf",
+            "L20260625000008_0522.pdf",
+            "L20260626000009_BGD_SNKO020260509798.pdf",
+            "L20260901000001_SHSL60355800_bgd.pdf",
+        ):
+            for it in self._items(name):
+                if not (it.unit_price and it.total_price and it.declared_qty):
+                    continue
+                digits = "".join(ch for ch in it.declared_qty if ch.isdigit() or ch == ".")
+                if not digits:
+                    continue
+                price = float(it.unit_price)
+                total = float(it.total_price)
+                assert abs(price * float(digits) - total) <= max(0.01, total * 0.001), (
+                    f"{name} item {it.item_no}: {price} × {digits} ≠ {total}"
+                )
+
+
 class TestEdgeCases:
     def test_empty_text(self):
         from fapiao_cn.parsers.invoice import parse_new_electronic_invoice

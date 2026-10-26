@@ -243,7 +243,7 @@ class TestCustomsBatch:
         data = self._post_files(auth_headers, "L20260625000008_0522.pdf")[0]
         assert data["page_count"] == 6
         assert data["item_count"] == 24
-        assert data["total_amount"] == "49195.76"
+        assert data["total_amount"] == "57438.00"
 
     def test_customs_batch_merged_document_skips_release(self, auth_headers):
         """The 报关单 + 放行条 merged PDF must yield 报关单 fields only."""

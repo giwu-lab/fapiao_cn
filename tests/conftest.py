@@ -512,7 +512,9 @@ EXPECTED_CUSTOMS: Dict[str, dict] = {
         net_weight_kg="8277.48",
         item_count=24,
         currency="USD",
-        total_amount="49195.76",
+        # 明细总价合计：24 条明细逐行核对（1686 / 2604 / 3966 这三条是
+        # 整数总价，也必须计入）
+        total_amount="57438.00",
     ),
     "报关单/L20260626000009_BGD_SNKO020260509798.pdf": dict(
         declaration_variant="操作联",
