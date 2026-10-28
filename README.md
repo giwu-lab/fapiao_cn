@@ -12,7 +12,7 @@
 镜像特性：多阶段 `python:3.12-slim`、非 root、HEALTHCHECK 内置、`/app/logs` volume 挂载、时区 `Asia/Shanghai`、镜像 < 250 MB。Dockerfile 默认走国内 APT 镜像（`APT_MIRROR=mirrors.aliyun.com`），需要切回官方源：
 
 ```bash
-docker build --build-arg APT_MIRROR= -t fapiao_cn:1.1.0-ce .
+docker build --build-arg APT_MIRROR= -t fapiao_cn:1.2.0-ce .
 ```
 
 ### 构建方案
@@ -31,7 +31,7 @@ Dockerfile 会自动判断走哪条，**两条路都不需要改 Dockerfile**：
 bash scripts/prepare_wheels.sh           # 等价于 pip wheel --wheel-dir=wheels <deps>
 # 或指定 PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ bash scripts/prepare_wheels.sh
 
-docker build -t fapiao_cn:1.1.0-ce .
+docker build -t fapiao_cn:1.2.0-ce .
 ```
 
 > wheels/ 不用每次都重生成；只有锁定依赖版本时才需要重跑。脚本会自动用 `.venv/bin/python3`（如有）或系统 `python3`。
@@ -41,7 +41,7 @@ docker build -t fapiao_cn:1.1.0-ce .
 
 ```bash
 docker buildx create --use --driver docker-container --network host   # 一次性建 host 网络 builder
-docker buildx build -t fapiao_cn:1.1.0-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
+docker buildx build -t fapiao_cn:1.2.0-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
 ```
 
 **方案 C：完全离线**（路线 1 失败 + 上面共享网络也没法用时）—— 在主机上准备好 wheels **和** 基础 deb 包（apt-offline 工具链），用本地 deb 仓库喂给镜像。绝大多数情况下路线 1 + 共享网络已够用，此处不展开。
@@ -243,7 +243,7 @@ JSON 许可证：
 docker run ... \
   -e FC_LICENSE_FILE=/app/license.json \
   -v /path/to/license.json:/app/license.json:ro \
-  fapiao_cn:1.1.0-ee
+  fapiao_cn:1.2.0-ee
 ```
 
 - 许可证有效 → 开放被授权的能力；
@@ -297,12 +297,12 @@ docker run ... \
 
 ```bash
 # ① 开源版：直接在本仓库构建
-docker build -t fapiao_cn:1.1.0-ce .
+docker build -t fapiao_cn:1.2.0-ce .
 
 # ② 企业版：在企业版仓库（与本仓库同级检出）里把 wheel 产出到本仓库的 wheels/
 python ../fapiao_cn_ee/scripts/build_ee_wheel.py \
     --ce-root . --wheels-dir ./wheels
-docker build --build-arg EDITION=ee -t fapiao_cn:1.1.0-ee .
+docker build --build-arg EDITION=ee -t fapiao_cn:1.2.0-ee .
 ```
 
 `build_ee_wheel.py` 不进 wheel（只进 sdist），签发工具与厂商密钥始终留在
@@ -576,11 +576,11 @@ python -m pytest tests/ -v                  # 直接 pytest
 > + Docker 冒烟（真实票据样本与完整用例集在私有验证环境，不入公开仓库）；
 > 企业版自身的用例在**企业版仓库**里单独运行。
 
-开源版 **464** 条用例通过（77 skipped / 2 xfailed）；装上企业版包并提供有效
-许可证后 **510** 条通过（31 skipped）；企业版仓库另有 **23** 条许可证与插件
-专项测试。样本共 41 个（34 PDF + 5 XML + 2 OFD）。
+开源版 **487** 条用例通过（88 skipped / 2 xfailed）；装上企业版包并提供有效
+许可证后 **543** 条通过（32 skipped / 2 xfailed）；企业版仓库另有 **23** 条许可证与插件
+专项测试。样本共 42 个（35 PDF + 5 XML + 2 OFD）。
 
-> `samples/` 按票种子目录组织：`新电子发票-标准/` / `新电子发票-旧格式/` / `成品油合并代码/` / `铁路电子客票/` / `航空运输电子客票/` / `中央非税收入统一票据/` / `报关单/` / `全电发票-XML/` / `全电发票-OFD/`。
+> `samples/` 按票种子目录组织：`新电子发票-标准/` / `新电子发票-旧格式/` / `新电子发票-平台下载/` / `成品油合并代码/` / `铁路电子客票/` / `航空运输电子客票/` / `中央非税收入统一票据/` / `报关单/` / `全电发票-XML/` / `全电发票-OFD/`。
 > **样本目录不在公开仓库里**（`.gitignore` 排除，避免真实票据外泄），归类表
 > 由 `scripts/sync_samples_layout.py --regen-index` 在本地生成。
 
@@ -589,6 +589,7 @@ python -m pytest tests/ -v                  # 直接 pytest
 | 模块 | 匹配类型 |
 | --- | --- |
 | `parsers/invoice.py` | 新电子发票（标准双栏、京东、京东大药房、水费、通行费变体） |
+| `parsers/platform_invoice.py` | 平台下载版电子发票（票面标签块在上、值块在下） |
 | `parsers/old_invoice.py` | 旧版电子发票（含密码区、校验码） |
 | `parsers/merged_code.py` | 合并代码 / 成品油（坐标解析人名） |
 | `parsers/airline_ticket.py` | 航空运输电子客票行程单 |
@@ -596,6 +597,28 @@ python -m pytest tests/ -v                  # 直接 pytest
 | `parsers/non_tax_receipt.py` | 中央非税收入统一票据（专利年费等） |
 | `parsers/xml_invoice.py` | XML 全电发票（`EInvoice` schema） |
 | `parsers/ofd_invoice.py` | OFD 全电票 (GB/T 33190，结构化 `CustomTag.xml` + 布局兜底) |
+
+### 平台下载版电子发票
+
+部分发票平台（下载页导出的 PDF）把票面拆成两段写进 PDF 内容流：第一段是
+**标签块**（`发票号码：` / `开票日期：` / `名称：` / 统一社会信用代码…），第二段
+才是**值块**（号码 / 日期 / 名称 / 税号 / 明细 / 合计 / 大写金额）。两段在票面
+上其实**同行相邻**，但 PDF 文本层的顺序就是内容流顺序，于是 `发票号码：` 后面
+是空的，号码却排在文本末尾 —— 依赖「标签: 值」同行的标准解析器会把号码、
+日期、金额全部丢掉。
+
+`parsers/platform_invoice.py` 按**词坐标**重建阅读顺序：把词按 `(top, x0)`
+排序、按行距聚成行，逐行拼回文本，再交给 `parsers/invoice.py` 里已验证的取值
+函数；同时剔除「购买方信息 / 销售方信息」的竖排表头字（它们与买方 / 卖方名称
+同行，混进文本会把卖方名称截成「售」）。
+
+版式识别用**结构特征**而不是关键字：`发票号码 / 发票代码 / 开票日期 / 开票人`
+里至少有两个以「标签 + 冒号」独占一行（冒号后面没有值）。普通票面这些标签
+都带值同行，因此不会误判。若重建结果反而比原始文本少命中字段，会自动退回
+原始文本 —— 永远不会比原来更差。
+
+> PDF 发票的 `items[]` 仍为空数组（与其它 PDF 票种一致）；明细只在 XML 全电
+> 发票里填充，见 [字段说明](#字段说明)。
 
 > ⚠️ **H43: XML schema 同步责任**:`parsers/xml_invoice.py` 通过 `defusedxml.ElementTree` 解析 XML 文档,字段名（如 `SellerInformation/SellerName`、`BasicInformation/TotalTax-includedAmount`）与发票平台当前的 ``EInvoice`` schema **硬编码对应**。若国家税务总局 / 发票平台升级 schema（命名空间 URI 变化、字段重命名等）需要手动同步本文件（同时影响 `parsers/ofd_invoice.py`,因为 OFD 内部嵌入的 `<EInvoice>` 复用同一 schema）。建议在升级前先跑一次 XML/OFD 样本回归。
 

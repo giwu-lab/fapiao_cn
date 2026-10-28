@@ -47,6 +47,47 @@ _PAYEE_RE = re.compile(r"收\s*款\s*人\s*[:：]\s*([\u4e00-\u9fff]+)")
 _REVIEWER_RE = re.compile(r"复\s*核\s*人?\s*[:：]\s*([\u4e00-\u9fff]+)")
 _DRAWER_RE = re.compile(r"开\s*票\s*人\s*[:：]?\s*([\u4e00-\u9fff]+)")
 
+# Kangxi radical variants that pdfplumber sometimes emits.
+# (Add new codepoints to this dict when they appear in the wild.)
+_KANGXI_TO_CJK = {
+    0x2F26: "\u5b50",  # ⼦ → 子
+}
+_KANGXI_TRANSLATE = str.maketrans(
+    {chr(src): dst for src, dst in _KANGXI_TO_CJK.items()}
+)
+
+# 京东大药房等变体的表头/标签字符在 pdfplumber 输出中会被连续重复落字
+# （如 "购购购 销销销"、"发发发票票票号号号码码码：：："）。折叠为单字后
+# 现有解析器正则原地生效。仅合并 3+ 连续同字，避开 "滴滴"、"敌敌畏"、
+# "税款"、"家家" 等合法的双重字。字符类覆盖 CJK 表意文字 + 全角符号
+# （含 ：， ；， （）， 等京东大药房重复出现的全角冒号）。
+_RE_REPEAT_CJK = re.compile(r"([\u4e00-\u9fff\uff00-\uffef])\1{2,}")
+
+
+def normalize_invoice_text(text: str) -> str:
+    """把 PDF 抽出来的原始文本规整成解析器可用的形态。
+
+    - 全角空格 / NBSP → 普通空格
+    - 康熙部首 ``⼦`` → ``子``
+    - 行内多余空白折叠为单个空格，空行丢弃
+    - 3+ 连续重复的 CJK / 全角符号折叠为一个
+
+    这个函数被两条链路共用：``pipeline._clean_text`` 处理 PDF 原始文本，
+    ``parsers.platform_invoice`` 处理按词坐标重建出来的文本。放在
+    ``utils`` 里是为了避开 ``pipeline`` ↔ ``parsers`` 的循环导入。
+    """
+
+    if not text:
+        return ""
+    text = text.replace("\u3000", " ").replace("\xa0", " ").translate(_KANGXI_TRANSLATE)
+    out_lines = []
+    for ln in text.splitlines():
+        ln = " ".join(ln.split())
+        if ln:
+            ln = _RE_REPEAT_CJK.sub(r"\1", ln)
+            out_lines.append(ln)
+    return "\n".join(out_lines)
+
 
 def first_match(pattern: str, text: str, group: int = 1, flags: int = 0) -> str:
     """Return the first regex match group, or empty string."""

@@ -48,6 +48,20 @@ TEST_EXTRACT_KEY = "test-key-extract-only-do-not-use-in-prod"
 # Map of filename → expected fields (partial).  We only check the
 # fields that are stable and well-defined for each file.
 EXPECTED: Dict[str, dict] = {
+    "新电子发票-平台下载/志诚_26322000008364632971.pdf": dict(
+        invoice_type="电子发票（普通发票）",
+        invoice_number="26322000008364632971",
+        issue_date="2026-10-12",
+        buyer_name="重庆市旺成科技股份有限公司",
+        buyer_tax_id="91500106622015389N",
+        seller_name="兴化市志诚五金制品有限公司",
+        seller_tax_id="92321281MAC97HLQ8N",
+        amount_without_tax="272.77",
+        tax_amount="2.73",
+        total_amount="275.50",
+        total_amount_upper="贰佰柒拾伍圆伍角整",
+        drawer="邱惠燚",
+    ),
     "新电子发票-标准/购_材料_01.pdf": dict(
         invoice_type="电子发票（增值税专用发票）",
         invoice_number="25502000000129241041",
@@ -122,7 +136,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="叁佰伍拾玖圆整",
         drawer="张宇松",
     ),
-    "新电子发票-标准/购_自来水_01.pdf": dict(
+    "新电子发票-平台下载/购_自来水_01.pdf": dict(
         invoice_type="电子发票（增值税专用发票）",
         invoice_number="26502000001100907556",
         issue_date="2026-06-08",
@@ -254,7 +268,7 @@ EXPECTED: Dict[str, dict] = {
         total_amount_upper="肆拾陆元叁角",
         drawer="马苓苓",
     ),
-    "新电子发票-标准/个人代开_01.pdf": dict(
+    "新电子发票-平台下载/个人代开_01.pdf": dict(
         invoice_type="电子发票（普通发票）",
         invoice_number="26502000001222344391",
         issue_date="2026-06-20",

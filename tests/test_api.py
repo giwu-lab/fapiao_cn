@@ -363,7 +363,7 @@ class TestExtract:
         files = [
             "新电子发票-标准/购_材料_01.pdf", "新电子发票-旧格式/购_材料_02.pdf",
             "新电子发票-标准/购_租赁_01.pdf", "成品油合并代码/购_油品_01.pdf",
-            "航空运输电子客票/航_运输_01.pdf", "新电子发票-标准/购_自来水_01.pdf",
+            "航空运输电子客票/航_运输_01.pdf", "新电子发票-平台下载/购_自来水_01.pdf",
         ]
         for fname in files:
             path = os.path.join(_TEST_DIR, fname)

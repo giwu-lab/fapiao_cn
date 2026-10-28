@@ -11,6 +11,7 @@ left untouched because the parser is not yet registered):
 
     新电子发票-标准/         parser "new"      (excluding 购_油品_02.pdf)
     新电子发票-旧格式/       parser "old"      (购_材料_02.pdf)
+    新电子发票-平台下载/     parser "platform" (标签块在上、值块在下)
     成品油合并代码/          parser "merged_code"
     铁路电子客票/            parser "train"
     航空运输电子客票/        parser "airline"
@@ -46,6 +47,7 @@ SAMPLES_DIR = REPO_ROOT / "samples"
 LAYOUT: dict[str, str] = {
     "new": "新电子发票-标准",
     "old": "新电子发票-旧格式",
+    "platform": "新电子发票-平台下载",
     "merged_code": "成品油合并代码",
     "train": "铁路电子客票",
     "airline": "航空运输电子客票",
@@ -61,6 +63,10 @@ DESCRIPTIONS: dict[str, str] = {
         "（含京东、水费、通行费变体）"
     ),
     "old": "电子发票（普通发票）- 旧格式（含密码区、校验码）",
+    "platform": (
+        "电子发票（普通发票）- 平台下载版"
+        "（票面标签块在上、值块在下，按词坐标重建阅读顺序）"
+    ),
     "merged_code": "电子发票（普通发票）- 合并代码/成品油变体",
     "train": "电子发票（铁路电子客票）",
     "airline": "电子发票（航空运输电子客票行程单）",

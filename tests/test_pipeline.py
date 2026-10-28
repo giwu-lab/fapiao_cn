@@ -184,6 +184,49 @@ class TestCustomsItemFieldsFromSamples:
                 )
 
 
+class TestPlatformLayoutRouting:
+    """平台下载版（票面标签块在上、值块在下）走 platform 解析器。
+
+    其它票面必须保持原样 —— 版式识别靠结构特征，不能误伤。
+    """
+
+    # 同一个平台模板会出现在不同目录里（带 / 不带「统一发票监制章」），
+    # 所以这里用显式白名单，而不是按目录判断。
+    PLATFORM_SAMPLES = {
+        "新电子发票-平台下载/志诚_26322000008364632971.pdf",
+        "新电子发票-平台下载/个人代开_01.pdf",
+        "新电子发票-平台下载/购_自来水_01.pdf",
+    }
+
+    def test_only_platform_samples_use_platform_parser(self):
+        import glob
+        from pathlib import Path
+
+        import pdfplumber
+
+        from fapiao_cn.parsers import dispatch
+        from fapiao_cn.pipeline import _clean_text
+        from tests._helpers import TEST_DIR
+
+        if not TEST_DIR.exists():
+            pytest.skip("samples/ not available")
+
+        files = sorted(glob.glob(str(TEST_DIR / "**" / "*.pdf"), recursive=True))
+        assert files, "samples/ is empty"
+        seen = set()
+        for path in files:
+            with pdfplumber.open(path) as pdf:
+                text = _clean_text(pdf.pages[0].extract_text() or "")
+            name, _ = dispatch(text)
+            rel = Path(path).relative_to(TEST_DIR).as_posix()
+            if rel in self.PLATFORM_SAMPLES:
+                assert name == "platform", rel
+                seen.add(rel)
+            else:
+                assert name != "platform", rel
+        assert seen == self.PLATFORM_SAMPLES
+
+
 class TestEdgeCases:
     def test_empty_text(self):
         from fapiao_cn.parsers.invoice import parse_new_electronic_invoice

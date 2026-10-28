@@ -1260,7 +1260,7 @@ class TestExpenseCategorySamples:
             ("新电子发票-标准/购_滴滴_02.pdf", "transportation", "seller"),
             ("新电子发票-标准/购_顺丰_01.pdf", "courier", "seller"),
             ("新电子发票-标准/购_通信_01.pdf", "telecom", "seller"),
-            ("新电子发票-标准/购_自来水_01.pdf", "water", "seller"),
+            ("新电子发票-平台下载/购_自来水_01.pdf", "water", "seller"),
             ("新电子发票-标准/购_油品_02.pdf", "fuel", "seller"),
             ("新电子发票-标准/购_餐饮_01.pdf", "dining", "seller"),
             ("新电子发票-标准/购_餐饮_02.pdf", "dining", "seller"),

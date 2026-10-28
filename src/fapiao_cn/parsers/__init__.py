@@ -20,6 +20,10 @@ from fapiao_cn.parsers.invoice import parse_new_electronic_invoice
 from fapiao_cn.parsers.merged_code import parse_merged_code_invoice
 from fapiao_cn.parsers.non_tax_receipt import parse_central_non_tax_receipt
 from fapiao_cn.parsers.old_invoice import parse_old_invoice
+from fapiao_cn.parsers.platform_invoice import (
+    looks_like_platform_layout,
+    parse_platform_invoice,
+)
 from fapiao_cn.parsers.train_ticket import parse_train_ticket
 
 # Most specific rules first.
@@ -84,6 +88,15 @@ _DESCRIPTIONS[DEFAULT_NAME] = (
     "（含京东、水费、通行费变体）"
 )
 
+# 平台下载版电子发票：票面标签块在上、值块在下，PDF 文本层的顺序与视觉
+# 顺序不一致。它不能靠关键字派发（关键字在坏掉的文本里照样匹配得上，
+# 但取值取不到），只能用结构特征识别，见 platform_invoice 模块。
+PLATFORM_NAME = "platform"
+_DESCRIPTIONS[PLATFORM_NAME] = (
+    "电子发票（普通发票）- 平台下载版"
+    "（票面标签块在上、值块在下，按词坐标重建阅读顺序）"
+)
+
 
 def register_external(
     name: str,
@@ -119,6 +132,10 @@ def dispatch(first_page_text: str) -> Tuple[str, Callable[[str, dict], object]]:
         for kw in kws:
             if kw in first_page_text:
                 return name, parser
+    # 平台下载版排在关键字规则之后、默认解析器之前：它仍然是一张新电子
+    # 发票（票种关键字不该命中），但文本层顺序坏了，只能靠结构特征识别。
+    if looks_like_platform_layout(first_page_text):
+        return PLATFORM_NAME, parse_platform_invoice
     return DEFAULT_NAME, DEFAULT_PARSER_FUNC
 
 

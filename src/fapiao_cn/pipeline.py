@@ -10,7 +10,6 @@ parsers operate on plain text + line geometry only).
 from __future__ import annotations
 
 import io
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
@@ -20,27 +19,10 @@ from fapiao_cn.config import settings
 from fapiao_cn.expense_category import classify_expense
 from fapiao_cn.parsers import dispatch
 from fapiao_cn.schemas import InvoiceRecord, PdfRaw
-from fapiao_cn.utils import normalize_lines
+from fapiao_cn.utils import normalize_invoice_text, normalize_lines
 
 if TYPE_CHECKING:
     from pdfplumber.page import Page
-
-# Kangxi radical variants that pdfplumber sometimes emits.
-# (Add new codepoints to this dict when they appear in the wild.)
-_KANGXI_TO_CJK = {
-    0x2F26: "\u5b50",  # ⼦ → 子
-}
-_KANGXI_TRANSLATE = str.maketrans(
-    {chr(src): dst for src, dst in _KANGXI_TO_CJK.items()}
-)
-
-# 京东大药房等变体的表头/标签字符在 pdfplumber 输出中会被连续重复
-# 落字（如 "购购购 销销销 买买买 售售售"、"发发发票票票号号号码码码：：："）。
-# 折叠为单字后现有解析器正则原地生效。仅合并 3+ 连续同字，避开
-# "滴滴"、"敌敌畏"、"税款"、"家家" 等合法的双重字。
-# 字符类覆盖 CJK 表意文字 + 全角符号（含 ：， ；， （）， 等京东大药房
-# 重复出现的全角冒号）。
-_RE_REPEAT_CJK = re.compile(r"([\u4e00-\u9fff\uff00-\uffef])\1{2,}")
 
 
 @dataclass
@@ -84,20 +66,13 @@ def _clean_text(text: str) -> str:
     pdfplumber's default output uses single spaces between glyphs that
     share a row. We keep that structure but collapse runs of spaces
     caused by line breaks inside paragraphs.
+
+    实现下沉到 :func:`fapiao_cn.utils.normalize_invoice_text` —— 平台下载版
+    电子发票解析器要按词坐标重建文本，重建后的文本也要走同一套规整，
+    放在 ``utils`` 里可以避开 ``pipeline`` ↔ ``parsers`` 的循环导入。
     """
 
-    if not text:
-        return ""
-    # Replace NBSP / fullwidth spaces, then normalise Kangxi radicals.
-    text = text.replace("\u3000", " ").replace("\xa0", " ").translate(_KANGXI_TRANSLATE)
-    # Keep \n as line separator; collapse multi-space inside a line.
-    out_lines = []
-    for ln in text.splitlines():
-        ln = " ".join(ln.split())
-        if ln:
-            ln = _RE_REPEAT_CJK.sub(r"\1", ln)
-            out_lines.append(ln)
-    return "\n".join(out_lines)
+    return normalize_invoice_text(text)
 
 
 def _load_pages(contents: bytes) -> List[PageView]:
