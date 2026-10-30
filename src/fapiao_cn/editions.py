@@ -44,6 +44,7 @@ class Feature(str, Enum):
     EXTRACT = "extract"
     BATCH = "batch"
     CUSTOMS = "customs"
+    ACCEPTANCE = "acceptance"
     VERIFY = "verify"
 
 

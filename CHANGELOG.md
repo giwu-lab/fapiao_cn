@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-30
+
+### Added
+- **电子银行承兑汇票解析**（企业版）：新增 `POST /acceptance`（单文件）与
+  `POST /acceptance/batch`（批量），以及 `GET /formats/acceptance` 字段字典。
+
+  - 新增**独立能力位** `acceptance`（`Feature.ACCEPTANCE`）—— 授权了 `batch`
+    不等于授权电子承兑解析，需在许可证 `features` 里单独列出。签发工具
+    `sign_license.py` 的 `--features` **默认值不含** `acceptance`，必须显式
+    写出来才开通。
+  - 响应契约（`fapiao_cn.schemas.AcceptanceBill` / `AcceptanceEndorsement`）放在
+    **开源版**里，两版共用；解析实现随企业版发行包发布。
+  - 票面要素之外还返回转让背书 `endorsements[]`（背书人 / 被背书人 / 背书日期 /
+    不得转让标记）。
+  - 把承兑汇票误发到 `/invoice` / `/invoice/batch` 时返回 422 并在 `message` 里
+    指明「请走 `/acceptance`」—— 不再静默返回空字段。
+  - 开源版里这两个路径是 403 占位路由，两版路由表保持一致。
+  - 票面是**两栏格子表单**（标签竖排拆成单字、票据号码跨两行、金额栏上方压着
+    「十 亿 千 百 …」位表），解析走**词坐标锚定**（竖直重叠聚行 + 标签字符序列
+    + x 窗口 + 分栏），已在 4 家银行（中国 / 宁波 / 兴业 / 平安）的样本上逐字段
+    验证。
+
+### Changed
+- **插件契约**：`FapiaoPlugin.sync_parsers()` 的入参从 `bool` 换成**能力集**
+  （`frozenset[Feature]`）—— 早期版本只管报关单一条规则，现在按能力逐个注册 /
+  撤销。新增 `FapiaoPlugin.register_acceptance_route()`；CE 侧对**没有**该方法的
+  旧插件用 `getattr` 兜底成 403 占位路由，插件版本对不上时宁可少一个能力，也
+  不能让整个服务起不来。
+
 ## [1.2.0] - 2026-10-30
 
 > 2026-10-28 首发过一版 1.2.0（平台下载版电子发票解析器）。本版在其基础上补入

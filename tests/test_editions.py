@@ -63,6 +63,7 @@ class TestEntitlementsModel:
     def test_ce_features_exclude_enterprise_ones(self):
         assert Feature.BATCH not in CE_FEATURES
         assert Feature.CUSTOMS not in CE_FEATURES
+        assert Feature.ACCEPTANCE not in CE_FEATURES
         assert Feature.EXTRACT in CE_FEATURES
 
     def test_no_edition_env_switch(self, monkeypatch):
@@ -123,7 +124,7 @@ class TestCapabilityEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["edition"] in ("ce", "ee")
-        assert set(data["features"]) == {"extract", "batch", "customs", "verify"}
+        assert set(data["features"]) == {"extract", "batch", "customs", "acceptance", "verify"}
         assert data["features"]["extract"] is True
         assert "limits" in data
         assert "max_file_mb" in data["limits"]

@@ -306,3 +306,93 @@ class CustomsDeclarationHeader(BaseModel):
 
 
 CustomsDeclarationHeader.model_rebuild()
+
+
+class AcceptanceEndorsement(BaseModel):
+    """电子商业汇票的**转让背书**记录（票据背面 / 续页）。
+
+    一张票可以有多段背书：出票人 → 背书人 → 被背书人 → …，每一段
+    都带自己的背书日期与「不得转让标记」。
+    """
+
+    endorser: str = ""           # 背书人名称
+    endorsee: str = ""           # 被背书人名称
+    endorsement_date: str = ""   # 背书日期 (ISO 格式 YYYY-MM-DD)
+    no_transfer: str = ""        # 不得转让标记 (如 可再转让)
+
+
+class AcceptanceBill(BaseModel):
+    """电子银行承兑汇票（电子商业汇票）。
+
+    响应契约两版共有（实现随企业版发行包发布）。字段与票面的对应关系：
+
+    ============================  ====================================
+    字段                          票面标签
+    ============================  ====================================
+    ``bill_type``                 票面抬头（电子银行承兑汇票）
+    ``bill_no``                   票据号码（票面整串，见下）
+    ``bill_status``               票据状态（如 已收票-可流通）
+    ``issue_date``                出票日期
+    ``due_date``                  汇票到期日
+    ``acceptance_date``           承兑日期
+    ``amount``                    票据金额（数字，元，2 位小数）
+    ``amount_upper``              票据金额（大写）
+    ``currency``                  币种（人民币）
+    ``drawer_*``                  出票人 全称 / 账号 / 开户银行
+    ``payee_*``                   收款人 全称 / 账号 / 开户银行
+    ``acceptor_*``                承兑人 全称 / 账号 / 开户行名称 / 开户行行号
+    ``contract_no``               交易合同号
+    ``transferable``              能否转让（如 可再转让-可分包）
+    ``display_date``              显示日期（票面导出时间，非票据要素）
+    ``endorsements``              转让背书记录
+    ============================  ====================================
+
+    ``bill_no`` 是**票面原样打印的那一整串**（票据代码 + 出票日期 +
+    8 位票号 + 连续编号，银行系统用的就是这一串），不做切分解释 ——
+    需要 8 位核心票号的调用方请自行按业务规则截取。
+    """
+
+    # 文档元信息
+    file: str = ""
+    page_count: int = 0
+
+    # 票据标识
+    bill_type: str = ""     # 票据种类（电子银行承兑汇票）
+    bill_no: str = ""       # 票据号码（票面整串）
+    bill_status: str = ""   # 票据状态
+
+    # 日期 (ISO 格式 YYYY-MM-DD)
+    issue_date: str = ""        # 出票日期
+    due_date: str = ""          # 汇票到期日
+    acceptance_date: str = ""   # 承兑日期
+
+    # 金额
+    amount: str = ""        # 票据金额（元，2 位小数）
+    amount_upper: str = ""  # 票据金额（大写）
+    currency: str = ""      # 币种（人民币）
+
+    # 出票人
+    drawer_name: str = ""     # 出票人 全称
+    drawer_account: str = ""  # 出票人 账号
+    drawer_bank: str = ""     # 出票人 开户银行
+
+    # 收款人
+    payee_name: str = ""     # 收款人 全称
+    payee_account: str = ""  # 收款人 账号
+    payee_bank: str = ""     # 收款人 开户银行
+
+    # 承兑人
+    acceptor_name: str = ""       # 承兑人 全称
+    acceptor_account: str = ""    # 承兑人 账号
+    acceptor_bank_name: str = ""  # 承兑人 开户行名称
+    acceptor_bank_no: str = ""    # 承兑人 开户行行号
+
+    # 其他票面要素
+    contract_no: str = ""   # 交易合同号
+    transferable: str = ""  # 能否转让
+    display_date: str = ""  # 显示日期（票面导出时间）
+
+    # 转让背书
+    endorsements: List[AcceptanceEndorsement] = []
+
+    message: str = "success"

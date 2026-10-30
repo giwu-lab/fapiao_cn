@@ -13,13 +13,17 @@ CE 侧只依赖下面这几个方法，EE 侧怎么实现都行：
     结合许可证给出**实际**能力。许可证缺失 / 过期 / 签名不合法时必须
     返回 ``edition=ce`` 的 Entitlements（降级），不能"放行"。
 
-``register_customs_route(app)`` / ``register_batch_route(app)``
+``register_customs_route(app)`` / ``register_batch_route(app)`` /
+``register_acceptance_route(app)``
     注册企业版路由。插件缺席时 CE 注册 403 占位路由，保证两版路由表
     一致 —— 客户端不会因为版本差异拿到 404。
 
-``sync_parsers(entitled: bool)``
-    按授权状态同步 dispatch 规则（幂等）。企业版的报关单规则必须**只在
-    被授权时**注册，否则未授权的安装会通过 ``/formats`` 泄漏报关单能力。
+``sync_parsers(features)``
+    按授权状态同步 dispatch 规则（幂等）。入参是**当前实际授予的能力集**
+    （``fapiao_cn.editions.Feature`` 的集合）—— 早期版本这里是个 bool
+    （只管报关单一条规则），现在按能力逐个判断：企业版的报关单 /
+    电子承兑规则必须**只在被授权时**注册，否则未授权的安装会通过
+    ``/formats`` 泄漏企业版能力。
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from typing import Optional, Protocol
 
 from fastapi import FastAPI
 
-from fapiao_cn.editions import Entitlements
+from fapiao_cn.editions import Entitlements, Feature
 
 log = logging.getLogger("fapiao_cn.plugins")
 
@@ -56,8 +60,21 @@ class FapiaoPlugin(Protocol):
         """注册 ``POST /invoice/batch`` 的真实实现。"""
         ...
 
-    def sync_parsers(self, entitled: bool) -> None:
-        """按授权状态同步 dispatch 规则（幂等）。"""
+    def register_acceptance_route(self, app: FastAPI) -> None:
+        """注册电子承兑汇票提取路由（``POST /acceptance`` 与
+        ``POST /acceptance/batch``）的真实实现。
+
+        这个方法是后加的 —— 旧版本的企业版包没有它。CE 侧用
+        ``getattr`` 兜底成 403 占位路由，所以老插件配新开源版不会起不来。
+        """
+        ...
+
+    def sync_parsers(self, features: frozenset[Feature]) -> None:
+        """按授权状态同步 dispatch 规则（幂等）。
+
+        ``features`` 是当前实际授予的能力集；插件按能力逐个注册 / 撤销
+        自己的解析规则。
+        """
         ...
 
 

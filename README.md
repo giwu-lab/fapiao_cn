@@ -12,7 +12,7 @@
 镜像特性：多阶段 `python:3.12-slim`、非 root、HEALTHCHECK 内置、`/app/logs` volume 挂载、时区 `Asia/Shanghai`、镜像 < 250 MB。Dockerfile 默认走国内 APT 镜像（`APT_MIRROR=mirrors.aliyun.com`），需要切回官方源：
 
 ```bash
-docker build --build-arg APT_MIRROR= -t fapiao_cn:1.2.0-ce .
+docker build --build-arg APT_MIRROR= -t fapiao_cn:1.3.0-ce .
 ```
 
 ### 构建方案
@@ -31,7 +31,7 @@ Dockerfile 会自动判断走哪条，**两条路都不需要改 Dockerfile**：
 bash scripts/prepare_wheels.sh           # 等价于 pip wheel --wheel-dir=wheels <deps>
 # 或指定 PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ bash scripts/prepare_wheels.sh
 
-docker build -t fapiao_cn:1.2.0-ce .
+docker build -t fapiao_cn:1.3.0-ce .
 ```
 
 > wheels/ 不用每次都重生成；只有锁定依赖版本时才需要重跑。脚本会自动用 `.venv/bin/python3`（如有）或系统 `python3`。
@@ -41,7 +41,7 @@ docker build -t fapiao_cn:1.2.0-ce .
 
 ```bash
 docker buildx create --use --driver docker-container --network host   # 一次性建 host 网络 builder
-docker buildx build -t fapiao_cn:1.2.0-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
+docker buildx build -t fapiao_cn:1.3.0-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
 ```
 
 **方案 C：完全离线**（路线 1 失败 + 上面共享网络也没法用时）—— 在主机上准备好 wheels **和** 基础 deb 包（apt-offline 工具链），用本地 deb 仓库喂给镜像。绝大多数情况下路线 1 + 共享网络已够用，此处不展开。
@@ -130,9 +130,12 @@ print(resp.seller_name, resp.total_amount, resp.message)
 | GET | `/capabilities` | 当前发行版与可用能力（公开） |
 | GET | `/formats` | 支持的全部票种 |
 | GET | `/formats/customs` | 海关出口货物报关单字段 schema（**两版共有的响应契约**，只有企业版能实际解析报关单） |
+| GET | `/formats/acceptance` | 电子银行承兑汇票字段 schema（**两版共有的响应契约**，只有企业版能实际解析承兑汇票） |
 | POST | `/invoice` | 单文件提取 |
 | POST | `/invoice/batch` | **企业版** — 批量提取（并行，按输入顺序返回） |
 | POST | `/customs/batch` | **企业版** — 海关出口货物报关单**批量**提取（操作联 / 出口退税联），一次可传多份 |
+| POST | `/acceptance` | **企业版** — 电子银行承兑汇票单文件提取（票面要素 + 转让背书） |
+| POST | `/acceptance/batch` | **企业版** — 电子银行承兑汇票**批量**提取 |
 | POST | `/raw` | 仅返回 PDF 原始文本，XML/OFD 拒绝 |
 | POST | `/verify` | 国税查验代理（需 `FC_VERIFY_ENABLED=true`） |
 | POST | `/extract-and-verify` | 提取 + 查验一站式 |
@@ -257,6 +260,50 @@ curl -H "X-API-Key: $KEY" \
 > 把报关单误发到 `/invoice` 或 `/invoice/batch` 时，服务不再**静默返回空字段**
 > （那是数据丢失），而是返回 422 并在 `message` 里指明「请走 `/customs/batch`」。
 
+### 电子银行承兑汇票提取（`POST /acceptance`，企业版）
+
+电子商业汇票（电子银行承兑汇票）走**独立的两个端点**，入参与 `/invoice`、
+`/invoice/batch` 完全对齐：
+
+```bash
+# 单文件
+curl -H "X-API-Key: $KEY" \
+  -F "file=@samples/电子承兑/电子银行承兑汇票 (1).pdf" \
+  http://localhost:8091/acceptance
+
+# 批量（multipart 里重复 files 字段，或 JSON {"files": [...]}）
+curl -H "X-API-Key: $KEY" \
+  -F "files=@承兑汇票A.pdf" \
+  -F "files=@承兑汇票B.pdf" \
+  http://localhost:8091/acceptance/batch
+```
+
+响应字段与票面的对应关系：
+
+| 字段 | 票面标签 |
+| --- | --- |
+| `bill_type` | 电子银行承兑汇票（固定值） |
+| `bill_no` | 票据号码（**票面整串**，跨行拼接） |
+| `bill_status` | 票据状态（如 已收票-可流通） |
+| `issue_date` / `due_date` / `acceptance_date` | 出票日期 / 汇票到期日 / 承兑日期 |
+| `amount` / `amount_upper` / `currency` | 票据金额（元）/ 金额大写 / 币种 |
+| `drawer_name` / `drawer_account` / `drawer_bank` | 出票人 全称 / 账号 / 开户银行 |
+| `payee_name` / `payee_account` / `payee_bank` | 收款人 全称 / 账号 / 开户银行 |
+| `acceptor_name` / `acceptor_account` | 承兑人 全称 / 账号 |
+| `acceptor_bank_name` / `acceptor_bank_no` | 承兑人 开户行名称 / 开户行行号 |
+| `transferable` | 能否转让 |
+| `contract_no` | 交易合同号 |
+| `display_date` | 显示日期（含导出时间） |
+| `endorsements[]` | 转让背书记录（`endorser` / `endorsee` / `endorsement_date` / `no_transfer`） |
+
+票面是**两栏格子表单**，标签多为竖排单字（「出」「票」「日」「期」），票据号码
+跨两行，金额数字位上方还压着一行「十 亿 千 百 … 元 角 分」位表 —— 解析走**词
+坐标锚定**（竖直重叠聚行 + 标签字符序列 + x 窗口 + 分栏），不是「标签: 值」
+的同行正则。已在 4 家银行（中国 / 宁波 / 兴业 / 平安）的样本上逐字段验证。
+
+> 把承兑汇票误发到 `/invoice` 或 `/invoice/batch` 时，服务不再**静默返回空字段**
+> （那是数据丢失），而是返回 422 并在 `message` 里指明「请走 `/acceptance`」。
+
 ## 发行版：CE（开源版）与 EE（企业版）
 
 本项目分两个**互相独立的发行包**：
@@ -264,7 +311,7 @@ curl -H "X-API-Key: $KEY" \
 | 发行包 | 内容 | 能力 |
 | --- | --- | --- |
 | `fapiao_cn` | 开源版（CE） | 发票 / 客票 / 费用分类 / 查验代理 |
-| `fapiao_cn_ee` | 企业版（EE），依赖 `fapiao_cn==<同版本>` | **报关单解析**（`/customs/batch`）、**批量提取**（`/invoice/batch`） |
+| `fapiao_cn_ee` | 企业版（EE），依赖 `fapiao_cn==<同版本>` | **报关单解析**（`/customs/batch`）、**批量提取**（`/invoice/batch`）、**电子承兑汇票解析**（`/acceptance`、`/acceptance/batch`） |
 
 **商业边界落在发行包上，不是运行时的 if。** CE 的 wheel 里没有报关单解析器，
 CE 的镜像里连 `fapiao_cn_ee` 的字节码都不存在（构建时按 `ARG EDITION` 把
@@ -296,7 +343,7 @@ JSON 许可证：
 docker run ... \
   -e FC_LICENSE_FILE=/app/license.json \
   -v /path/to/license.json:/app/license.json:ro \
-  fapiao_cn:1.2.0-ee
+  fapiao_cn:1.3.0-ee
 ```
 
 - 许可证有效 → 开放被授权的能力；
@@ -334,14 +381,22 @@ docker run ... \
 ```json
 {
   "edition": "ce",
-  "features": {"extract": true, "batch": false, "customs": false, "verify": true},
+  "features": {
+    "extract": true,
+    "batch": false,
+    "customs": false,
+    "acceptance": false,
+    "verify": true
+  },
   "limits": {"max_file_mb": 10, "max_batch_files": 50, "max_batch_total_mb": 500},
   "license": {"status": "absent", "license_id": "", "customer": "", "expires_at": ""}
 }
 ```
 
-前端据此显示/隐藏「批量上传」「报关单解析」入口 —— 用户看得见能力边界，
+前端据此显示/隐藏「批量上传」「报关单解析」「电子承兑」入口 —— 用户看得见能力边界，
 也知道该买什么。
+
+> `acceptance` 是**独立**的能力位：授权了 `batch` 不等于授权电子承兑汇票解析。
 
 ### 构建两个版本
 
@@ -350,12 +405,12 @@ docker run ... \
 
 ```bash
 # ① 开源版：直接在本仓库构建
-docker build -t fapiao_cn:1.2.0-ce .
+docker build -t fapiao_cn:1.3.0-ce .
 
 # ② 企业版：在企业版仓库（与本仓库同级检出）里把 wheel 产出到本仓库的 wheels/
 python ../fapiao_cn_ee/scripts/build_ee_wheel.py \
     --ce-root . --wheels-dir ./wheels
-docker build --build-arg EDITION=ee -t fapiao_cn:1.2.0-ee .
+docker build --build-arg EDITION=ee -t fapiao_cn:1.3.0-ee .
 ```
 
 `build_ee_wheel.py` 不进 wheel（只进 sdist），签发工具与厂商密钥始终留在
@@ -365,8 +420,8 @@ docker build --build-arg EDITION=ee -t fapiao_cn:1.2.0-ee .
 
 CE ↔ EE 的接缝在 `fapiao_cn.plugins.FapiaoPlugin`：企业版实现
 `entitlements()` / `register_customs_route()` / `register_batch_route()` /
-`sync_parsers()` 四个方法即可。**本仓库是公开的，企业版实现在私有仓库
-`fapiao_cn_ee` 里**，两边靠这个契约对接，契约不用改。
+`register_acceptance_route()` / `sync_parsers()` 五个方法即可。**本仓库是公开的，
+企业版实现在私有仓库 `fapiao_cn_ee` 里**，两边靠这个契约对接，契约不用改。
 
 > 完整的签发、部署、续期与排障手册见**企业版私有仓库**里的
 > `AUTHORIZATION.md`（随企业版源码一起分发）。
@@ -538,7 +593,7 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 
 | Scope | 端点 |
 | --- | --- |
-| `extract` | `/invoice`、`/invoice/batch`（企业版）、`/customs/batch`（企业版）、`/raw`、`/extract-and-verify`、`/formats`、`/formats/customs` |
+| `extract` | `/invoice`、`/invoice/batch`（企业版）、`/customs/batch`（企业版）、`/acceptance`、`/acceptance/batch`（企业版）、`/raw`、`/extract-and-verify`、`/formats`、`/formats/customs`、`/formats/acceptance` |
 | `verify` | `/verify` |
 | `admin` | `/health/full`（超集，含 extract / verify） |
 

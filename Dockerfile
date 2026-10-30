@@ -99,7 +99,8 @@ COPY --from=builder /wheels /wheels
 # /wheels 里的依赖在离线模式来自主机预置、在在线模式来自 builder 的
 # pip download —— 两条路到这里都已经是 wheel，所以这里恒为离线安装。
 #
-# EDITION=ee 时额外安装企业版发行包 fapiao_cn_ee（报关单解析 / 批量提取）。
+# EDITION=ee 时额外安装企业版发行包 fapiao_cn_ee（报关单解析 / 批量提取 /
+# 电子承兑汇票解析）。
 # 注意：企业版**光装了包还不够** —— 运行时还要用 FC_LICENSE_FILE 挂进
 # 一份有效许可证，否则服务自动降级成开源版行为（企业版端点返回 403，
 # 其余功能照常）。

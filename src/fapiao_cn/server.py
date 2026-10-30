@@ -47,7 +47,12 @@ from fapiao_cn.input import resolve_input
 from fapiao_cn.parsers import get_format_descriptions
 from fapiao_cn.pipeline import run as run_pipeline
 from fapiao_cn.plugins import load_plugin
-from fapiao_cn.schemas import CustomsDeclarationHeader, ExtractResponse, PdfRaw
+from fapiao_cn.schemas import (
+    AcceptanceBill,
+    CustomsDeclarationHeader,
+    ExtractResponse,
+    PdfRaw,
+)
 from fapiao_cn.utils import truncate as _truncate_msg
 from fapiao_cn.verify import VerifyRequest, verify_invoice
 
@@ -158,6 +163,46 @@ def _customs_field_schema() -> list:
     ]
 
 
+# 电子承兑汇票的字段字典（``/formats/acceptance``）。
+# 响应契约两版共有，**解析实现**随企业版发行包发布。
+_ACCEPTANCE_FIELD_SCHEMA = (
+    ("file", "string", "文件名"),
+    ("page_count", "int", "页数"),
+    ("bill_type", "string", "票据种类（电子银行承兑汇票）"),
+    ("bill_no", "string", "票据号码（票面整串）"),
+    ("bill_status", "string", "票据状态 (如 已收票-可流通)"),
+    ("issue_date", "string", "出票日期 (YYYY-MM-DD)"),
+    ("due_date", "string", "汇票到期日 (YYYY-MM-DD)"),
+    ("acceptance_date", "string", "承兑日期 (YYYY-MM-DD)"),
+    ("amount", "string", "票据金额 (元, 2 位小数)"),
+    ("amount_upper", "string", "票据金额 (大写)"),
+    ("currency", "string", "币种 (人民币)"),
+    ("drawer_name", "string", "出票人 全称"),
+    ("drawer_account", "string", "出票人 账号"),
+    ("drawer_bank", "string", "出票人 开户银行"),
+    ("payee_name", "string", "收款人 全称"),
+    ("payee_account", "string", "收款人 账号"),
+    ("payee_bank", "string", "收款人 开户银行"),
+    ("acceptor_name", "string", "承兑人 全称"),
+    ("acceptor_account", "string", "承兑人 账号"),
+    ("acceptor_bank_name", "string", "承兑人 开户行名称"),
+    ("acceptor_bank_no", "string", "承兑人 开户行行号"),
+    ("contract_no", "string", "交易合同号"),
+    ("transferable", "string", "能否转让 (如 可再转让-可分包)"),
+    ("display_date", "string", "显示日期 (票面导出时间, 非票据要素)"),
+    ("endorsements", "AcceptanceEndorsement[]", "转让背书记录"),
+)
+
+
+def _acceptance_field_schema() -> list:
+    """Serialize the schema entries as a list of dicts for ``/formats/acceptance``."""
+
+    return [
+        {"name": name, "type": typ, "description": desc}
+        for name, typ, desc in _ACCEPTANCE_FIELD_SCHEMA
+    ]
+
+
 # ── 企业版占位路由 ────────────────────────────────────────────────
 # 开源版里没有 fapiao_cn_ee 发行包，报关单与批量提取**只有路径没有实现**：
 # 路由照样注册（两版路由表一致，客户端不会因为版本差异拿到 404），
@@ -198,6 +243,43 @@ def _register_batch_unavailable(app: FastAPI) -> None:
         raise HTTPException(
             status_code=403,
             detail=feature_not_available_payload(Feature.BATCH),
+        )
+
+
+def _register_acceptance_unavailable(app: FastAPI) -> None:
+    """注册电子承兑两个端点的 403 占位路由。
+
+    与报关单 / 批量提取同理：路径在两版里一致，能力由许可证决定。
+    """
+
+    @app.post(
+        "/acceptance",
+        response_model=AcceptanceBill,
+        dependencies=[
+            Depends(auth_required("extract")),
+            Depends(require_feature(Feature.ACCEPTANCE)),
+        ],
+        openapi_extra={"x-required-edition": "ee"},
+    )
+    async def extract_acceptance_unavailable(request: Request):
+        raise HTTPException(
+            status_code=403,
+            detail=feature_not_available_payload(Feature.ACCEPTANCE),
+        )
+
+    @app.post(
+        "/acceptance/batch",
+        response_model=List[AcceptanceBill],
+        dependencies=[
+            Depends(auth_required("extract")),
+            Depends(require_feature(Feature.ACCEPTANCE)),
+        ],
+        openapi_extra={"x-required-edition": "ee"},
+    )
+    async def extract_acceptance_batch_unavailable(request: Request):
+        raise HTTPException(
+            status_code=403,
+            detail=feature_not_available_payload(Feature.ACCEPTANCE),
         )
 
 
@@ -323,7 +405,7 @@ def create_app() -> FastAPI:
     set_entitlements(entitlements)
     if plugin is not None:
         try:
-            plugin.sync_parsers(entitlements.has(Feature.CUSTOMS))
+            plugin.sync_parsers(entitlements.features)
         except Exception:  # noqa: BLE001 — 插件坏了不能拖垮启动
             log.exception("failed to sync enterprise parsers; continuing without them")
     log.info(
@@ -364,7 +446,7 @@ def create_app() -> FastAPI:
                 try:
                     fresh_ent = resolve_entitlements(plugin)
                     set_entitlements(fresh_ent)
-                    plugin.sync_parsers(fresh_ent.has(Feature.CUSTOMS))
+                    plugin.sync_parsers(fresh_ent.features)
                     log.info(
                         "SIGHUP received; reloaded license "
                         "(edition=%s features=%s license=%s)",
@@ -537,6 +619,18 @@ def create_app() -> FastAPI:
         """
         return {"fields": _customs_field_schema()}
 
+    @app.get(
+        "/formats/acceptance",
+        dependencies=[Depends(auth_required("extract"))],
+    )
+    def list_acceptance_format():
+        """Return the field dictionary for the electronic-acceptance schema.
+
+        与 ``/formats/customs`` 同一套做法：字段名 + 类型 + 中文标签，
+        客户端据此渲染界面，不用把字段名写死。
+        """
+        return {"fields": _acceptance_field_schema()}
+
     # 报关单解析是企业版能力：插件在 → 注册真实实现；不在 → 注册 403
     # 占位路由（路径保持一致，客户端不会因为版本差异拿到 404）。
     if plugin is not None:
@@ -590,6 +684,15 @@ def create_app() -> FastAPI:
         plugin.register_batch_route(app)
     else:
         _register_batch_unavailable(app)
+
+    # 电子承兑汇票解析（企业版）。旧版本的企业版包还没有这个方法 ——
+    # 用 getattr 兜底成 403 占位路由：宁可少一个能力，也不能因为插件
+    # 版本对不上就把整个服务起不来。
+    register_acceptance = getattr(plugin, "register_acceptance_route", None)
+    if callable(register_acceptance):
+        register_acceptance(app)
+    else:
+        _register_acceptance_unavailable(app)
 
     @app.post(
         "/raw",
