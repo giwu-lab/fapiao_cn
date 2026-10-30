@@ -19,7 +19,7 @@ services:
       # 性能开关
       FC_CACHE_SIZE:    "${FC_CACHE_SIZE:-128}"
       FC_BATCH_WORKERS: "${FC_BATCH_WORKERS:-4}"
-      # 文件大小（单文件上限 FC_MAX_FILE_MB 对 /extract 与 /extract/batch 同时生效）
+      # 文件大小（单文件上限 FC_MAX_FILE_MB 对 /invoice 与 /invoice/batch 同时生效）
       FC_MAX_FILE_MB:        "${FC_MAX_FILE_MB:-10}"
       FC_MAX_BATCH_FILES:    "${FC_MAX_BATCH_FILES:-50}"
       FC_MAX_BATCH_TOTAL_MB: "${FC_MAX_BATCH_TOTAL_MB:-500}"

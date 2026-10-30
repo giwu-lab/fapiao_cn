@@ -2,7 +2,7 @@
 
 用法：
 
-    @app.post("/extract", dependencies=[Depends(auth_required("extract"))])
+    @app.post("/invoice", dependencies=[Depends(auth_required("extract"))])
     async def extract(request: Request):
         ...
 

@@ -6,7 +6,12 @@ directly by tests (e.g. ``from tests._helpers import parse_pdf``).
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Callable, Iterator, List, Optional
+from urllib.parse import unquote
 
 import pdfplumber
 
@@ -87,3 +92,69 @@ def parse_customs_pdf(filename: str) -> CustomsDeclarationHeader:
 
 def _looks_like_ofd(contents: bytes) -> bool:
     return contents[:2] == b"PK" and b"OFD.xml" in contents[: 2 * 1024 * 1024]
+
+
+class _QuietHandler(BaseHTTPRequestHandler):
+    """HTTP handler that keeps the test output clean."""
+
+    def log_message(self, *args) -> None:  # noqa: D102 - BaseHTTPRequestHandler API
+        pass
+
+
+@contextmanager
+def serve_http(
+    resolver: Callable[[str], Optional[bytes]],
+    hits: Optional[List[str]] = None,
+) -> Iterator[str]:
+    """Run a throwaway HTTP server on a random local port.
+
+    ``resolver`` maps a request path to a response body; returning ``None``
+    answers ``404``.  ``hits`` — when given — collects every requested path,
+    so a test can assert that a request was (or was not) made.
+
+    Yields the base URL, e.g. ``http://127.0.0.1:54321``.
+    """
+
+    class Handler(_QuietHandler):
+        def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+            if hits is not None:
+                hits.append(self.path)
+            # 解析器只看路径部分，query string 不参与匹配
+            body = resolver(self.path.split("?")[0])
+            if body is None:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@contextmanager
+def serve_samples(hits: Optional[List[str]] = None) -> Iterator[str]:
+    """Serve the files under ``samples/`` over HTTP (path → file bytes)."""
+
+    root = TEST_DIR.resolve()
+
+    def _resolve(path: str) -> Optional[bytes]:
+        target = (root / unquote(path.lstrip("/"))).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            return None
+        if not target.is_file():
+            return None
+        return target.read_bytes()
+
+    with serve_http(_resolve, hits=hits) as base:
+        yield base

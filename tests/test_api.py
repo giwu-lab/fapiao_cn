@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from fapiao_cn.config import settings
 from fapiao_cn.server import app
-from tests._helpers import ee_feature_enabled
+from tests._helpers import ee_feature_enabled, serve_samples
 
 client = TestClient(app)
 
@@ -287,6 +287,78 @@ class TestCustomsBatch:
         assert len(data) == 1
         assert data[0]["customs_no"] == "223120260001921706"
 
+    def test_customs_batch_json_url_input(self, auth_headers):
+        """JSON 入参：``files[]`` 里直接给 URL —— 与 /invoice 的 url 入参对齐。"""
+        from urllib.parse import quote
+
+        with serve_samples() as base:
+            url = f"{base}/{quote('报关单/L20260602000010_0429.pdf')}"
+            resp = client.post(
+                "/customs/batch",
+                json={"files": [{"filename": "0429.pdf", "url": url}]},
+                headers=auth_headers,
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["customs_no"] == "223120260001921706"
+        assert data[0]["item_count"] == 3
+
+    def test_customs_batch_multipart_url_input(self, auth_headers):
+        """multipart 入参：``urls`` 字段给远端报关单地址。"""
+        from urllib.parse import quote
+
+        with serve_samples() as base:
+            url = f"{base}/{quote('报关单/L20260625000008_0522.pdf')}"
+            resp = client.post(
+                "/customs/batch",
+                headers=auth_headers,
+                files=[("urls", (None, url))],
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["item_count"] == 24
+        assert data[0]["total_amount"] == "57438.00"
+
+    def test_customs_batch_mixed_upload_and_url(self, auth_headers):
+        """同一批里混用「上传的文件」和「远端 URL」，顺序按输入顺序。"""
+        from urllib.parse import quote
+
+        with serve_samples() as base:
+            url = f"{base}/{quote('报关单/L20260626000009_BGD_SNKO020260509798.pdf')}"
+            path = self._path("L20260602000010_0429.pdf")
+            with open(path, "rb") as f:
+                payload = f.read()
+            resp = client.post(
+                "/customs/batch",
+                headers=auth_headers,
+                files=[
+                    ("files", ("0429.pdf", payload, "application/pdf")),
+                    ("urls", (None, url)),
+                ],
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert [d["customs_no"] for d in data] == [
+            "223120260001921706",
+            "222920260002109647",
+        ]
+
+    def test_customs_batch_unreachable_url(self, auth_headers):
+        """URL 抓不到 → 400，且说明是抓取失败。"""
+        from urllib.parse import quote
+
+        with serve_samples() as base:
+            url = f"{base}/{quote('报关单/不存在的报关单.pdf')}"
+            resp = client.post(
+                "/customs/batch",
+                json={"files": [{"filename": "x.pdf", "url": url}]},
+                headers=auth_headers,
+            )
+        assert resp.status_code == 400
+        assert "Failed to fetch URL" in resp.json()["detail"]
+
     def test_customs_batch_unauthenticated(self):
         """Without an auth header, the endpoint must reject."""
         path = self._path("L20260602000010_0429.pdf")
@@ -308,7 +380,7 @@ class TestExtract:
         path = os.path.join(_TEST_DIR, "新电子发票-标准", "购_材料_01.pdf")
         with open(path, "rb") as f:
             resp = client.post(
-                "/extract",
+                "/invoice",
                 headers=auth_headers,
                 files={"file": ("购_材料_01.pdf", f, "application/pdf")},
             )
@@ -320,7 +392,7 @@ class TestExtract:
 
     def test_extract_with_file_path_json(self, auth_headers):
         path = os.path.join(_TEST_DIR, "新电子发票-标准", "购_材料_01.pdf")
-        resp = client.post("/extract", json={"file_path": path}, headers=auth_headers)
+        resp = client.post("/invoice", json={"file_path": path}, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["invoice_number"]
@@ -340,7 +412,7 @@ class TestExtract:
         path = os.path.join(_TEST_DIR, "新电子发票-标准", "购_材料_01.pdf")
         with open(path, "rb") as f:
             resp = client.post(
-                "/extract",
+                "/invoice",
                 headers=auth_headers,
                 files={"file": ("购_材料_01.pdf", f, "application/pdf")},
             )
@@ -355,7 +427,7 @@ class TestExtract:
         assert expected_keys.issubset(data.keys())
 
     def test_extract_no_file_returns_error(self, auth_headers):
-        resp = client.post("/extract", json={}, headers=auth_headers)
+        resp = client.post("/invoice", json={}, headers=auth_headers)
         assert resp.status_code == 400
 
     def test_extract_multiple_formats(self, auth_headers):
@@ -367,7 +439,7 @@ class TestExtract:
         ]
         for fname in files:
             path = os.path.join(_TEST_DIR, fname)
-            resp = client.post("/extract", json={"file_path": path}, headers=auth_headers)
+            resp = client.post("/invoice", json={"file_path": path}, headers=auth_headers)
             assert resp.status_code == 200, f"{fname} failed: {resp.text}"
             data = resp.json()
             assert data.get("invoice_number"), f"{fname}: no invoice_number"
@@ -378,7 +450,7 @@ class TestExtract:
 class TestErrorHandling:
     def test_invalid_file_path_is_handled(self, auth_headers):
         resp = client.post(
-            "/extract",
+            "/invoice",
             json={"file_path": "/nonexistent/test.pdf"},
             headers=auth_headers,
         )
@@ -386,7 +458,7 @@ class TestErrorHandling:
 
     def test_invalid_base64_is_handled(self, auth_headers):
         resp = client.post(
-            "/extract",
+            "/invoice",
             json={"file_base64": "not-valid-base64!!!"},
             headers=auth_headers,
         )
@@ -394,7 +466,7 @@ class TestErrorHandling:
 
     def test_non_pdf_content_is_handled(self, auth_headers):
         resp = client.post(
-            "/extract",
+            "/invoice",
             headers=auth_headers,
             files={"file": ("test.txt", b"not a pdf", "text/plain")},
         )
@@ -408,7 +480,7 @@ class TestXmlApi:
         path = os.path.join(_TEST_DIR, "全电发票-XML", "购_材料_01.xml")
         with open(path, "rb") as f:
             resp = client.post(
-                "/extract",
+                "/invoice",
                 headers=auth_headers,
                 files={"file": ("购_材料_01.xml", f, "application/xml")},
             )
@@ -422,7 +494,7 @@ class TestXmlApi:
 
     def test_xml_file_path_json(self, auth_headers):
         path = os.path.join(_TEST_DIR, "全电发票-XML", "购_油品_01.xml")
-        resp = client.post("/extract", json={"file_path": path}, headers=auth_headers)
+        resp = client.post("/invoice", json={"file_path": path}, headers=auth_headers)
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["invoice_number"] == "26507000000185284098"
@@ -432,7 +504,7 @@ class TestXmlApi:
     def test_xml_sales_invoice(self, auth_headers):
         """The 销_产品_01.xml sample has a sales-side (selling) invoice shape."""
         path = os.path.join(_TEST_DIR, "全电发票-XML", "销_产品_01.xml")
-        resp = client.post("/extract", json={"file_path": path}, headers=auth_headers)
+        resp = client.post("/invoice", json={"file_path": path}, headers=auth_headers)
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["invoice_type"] == "电子发票（增值税专用发票）"
@@ -445,7 +517,7 @@ class TestXmlApi:
         path = os.path.join(_TEST_DIR, "全电发票-XML", "购_零售_01.xml")
         with open(path, "rb") as f:
             resp = client.post(
-                "/extract",
+                "/invoice",
                 headers=auth_headers,
                 files={"file": ("购_零售_01.xml", f, "application/xml")},
             )
@@ -461,7 +533,7 @@ class TestXmlApi:
 
     def test_xml_malformed_returns_error(self, auth_headers):
         resp = client.post(
-            "/extract",
+            "/invoice",
             headers=auth_headers,
             files={"file": ("bad.xml", b"<<not valid xml>>", "application/xml")},
         )
@@ -478,7 +550,7 @@ class TestOfdApi:
         path = os.path.join(_TEST_DIR, self.OFD_NAME)
         with open(path, "rb") as f:
             resp = client.post(
-                "/extract",
+                "/invoice",
                 headers=auth_headers,
                 files={
                         "file": (
@@ -498,7 +570,7 @@ class TestOfdApi:
     def test_ofd_file_path_json(self, auth_headers):
         path = os.path.join(_TEST_DIR, self.OFD_NAME)
         resp = client.post(
-            "/extract", json={"file_path": path}, headers=auth_headers
+            "/invoice", json={"file_path": path}, headers=auth_headers
         )
         assert resp.status_code == 200, resp.text
         data = resp.json()

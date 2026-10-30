@@ -53,7 +53,7 @@ class FapiaoPlugin(Protocol):
         ...
 
     def register_batch_route(self, app: FastAPI) -> None:
-        """注册 ``POST /extract/batch`` 的真实实现。"""
+        """注册 ``POST /invoice/batch`` 的真实实现。"""
         ...
 
     def sync_parsers(self, entitled: bool) -> None:

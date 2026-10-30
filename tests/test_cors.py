@@ -10,9 +10,9 @@ client = TestClient(app)
 
 class TestCors:
     def test_options_preflight_returns_allow_origin(self):
-        """Preflight OPTIONS /extract must include Access-Control-Allow-Origin."""
+        """Preflight OPTIONS /invoice must include Access-Control-Allow-Origin."""
         resp = client.options(
-            "/extract",
+            "/invoice",
             headers={
                 "Origin": "http://192.168.3.160:3000",
                 "Access-Control-Request-Method": "POST",
@@ -26,7 +26,7 @@ class TestCors:
     def test_post_includes_allow_origin_header(self, auth_headers):
         """POST response must include CORS header regardless of parse outcome."""
         resp = client.post(
-            "/extract",
+            "/invoice",
             headers={
                 **auth_headers,
                 "Origin": "http://192.168.3.160:3000",

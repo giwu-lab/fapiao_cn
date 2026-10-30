@@ -343,7 +343,7 @@ class TestDevFallback:
         path = os.path.join(
             os.path.dirname(__file__), "..", "samples", "新电子发票-标准", "购_材料_01.pdf"
         )
-        resp = unauth_client.post("/extract", json={"file_path": path})
+        resp = unauth_client.post("/invoice", json={"file_path": path})
         assert resp.status_code == 200
         assert resp.json()["invoice_number"]
 
@@ -360,7 +360,7 @@ class TestAuthEnforced:
         reset_key_store_for_tests()
         reset_rate_limiter_for_tests()
         client = TestClient(app)
-        resp = client.post("/extract", json={"file_path": "/nonexistent"})
+        resp = client.post("/invoice", json={"file_path": "/nonexistent"})
         assert resp.status_code == 401
         assert resp.headers.get("WWW-Authenticate", "").startswith("Bearer")
         assert 'realm="fapiao_cn"' in resp.headers["WWW-Authenticate"]
@@ -371,7 +371,7 @@ class TestAuthEnforced:
         reset_rate_limiter_for_tests()
         client = TestClient(app)
         resp = client.post(
-            "/extract",
+            "/invoice",
             headers={"Authorization": "Bearer wrong-key"},
             json={"file_path": "/nonexistent"},
         )
@@ -384,7 +384,7 @@ class TestAuthEnforced:
         reset_rate_limiter_for_tests()
         client = TestClient(app)
         resp = client.post(
-            "/extract",
+            "/invoice",
             headers={"X-API-Key": "alt-key"},
             json={"file_path": "/nonexistent"},
         )
@@ -427,7 +427,7 @@ class TestScopeEnforcement:
             os.path.dirname(__file__), "..", "samples", "新电子发票-标准", "购_材料_01.pdf"
         )
         resp = client.post(
-            "/extract",
+            "/invoice",
             headers=keys_file_env["verify_only"],
             json={"file_path": path},
         )

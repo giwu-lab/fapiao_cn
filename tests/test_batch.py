@@ -1,4 +1,4 @@
-"""Tests for the /extract/batch endpoint."""
+"""Tests for the /invoice/batch endpoint."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class TestBatchExtract:
                 "application/pdf",
             )),
         )
-        resp = client.post("/extract/batch", headers=auth_headers, files=data)
+        resp = client.post("/invoice/batch", headers=auth_headers, files=data)
         assert resp.status_code == 200
         body = resp.json()
         assert isinstance(body, list)
@@ -62,7 +62,7 @@ class TestBatchExtract:
             )),
             ("files", ("bad.txt", io.BytesIO(b"not a pdf"), "text/plain")),
         )
-        resp = client.post("/extract/batch", headers=auth_headers, files=data)
+        resp = client.post("/invoice/batch", headers=auth_headers, files=data)
         assert resp.status_code == 200
         body = resp.json()
         assert len(body) == 2
@@ -90,7 +90,7 @@ class TestBatchExtract:
             )),
         )
         with caplog.at_level(logging.ERROR, logger="fapiao_cn.ee.batch"):
-            resp = client.post("/extract/batch", headers=auth_headers, files=data)
+            resp = client.post("/invoice/batch", headers=auth_headers, files=data)
         assert resp.status_code == 200
         body = resp.json()
         assert len(body) == 1
@@ -106,7 +106,7 @@ class TestBatchExtract:
             files.append(
                 ("files", (f"dummy{i}.pdf", io.BytesIO(b"%PDF-1.4"), "application/pdf"))
             )
-        resp = client.post("/extract/batch", headers=auth_headers, files=tuple(files))
+        resp = client.post("/invoice/batch", headers=auth_headers, files=tuple(files))
         assert resp.status_code == 400
         assert "Too many files" in resp.json()["detail"]
 
@@ -119,12 +119,12 @@ class TestBatchExtract:
         data = (
             ("files", ("big.pdf", io.BytesIO(big), "application/pdf")),
         )
-        resp = client.post("/extract/batch", headers=auth_headers, files=data)
+        resp = client.post("/invoice/batch", headers=auth_headers, files=data)
         assert resp.status_code == 400
         assert "File too large" in resp.json()["detail"]
 
     def test_single_file_limit_shared_with_extract(self, monkeypatch, auth_headers):
-        """/extract 与 /extract/batch 必须共用同一个单文件上限 FC_MAX_FILE_MB。
+        """/invoice 与 /invoice/batch 必须共用同一个单文件上限 FC_MAX_FILE_MB。
 
         同一个超限文件送两个端点都要被拒，只是状态码语义不同：
         批量入口在闸门处整批 400，单文件端点由 parse_pdf 兜底返回 422。
@@ -135,7 +135,7 @@ class TestBatchExtract:
         big = b"x" * (2 * 1024 * 1024)  # 2 MB > 1 MB
 
         single = client.post(
-            "/extract",
+            "/invoice",
             headers=auth_headers,
             files={"file": ("big.pdf", io.BytesIO(big), "application/pdf")},
         )
@@ -143,7 +143,7 @@ class TestBatchExtract:
         assert "file_too_large" in single.json()["message"]
 
         batch = client.post(
-            "/extract/batch",
+            "/invoice/batch",
             headers=auth_headers,
             files=(("files", ("big.pdf", io.BytesIO(big), "application/pdf")),),
         )
@@ -163,7 +163,7 @@ class TestBatchExtract:
         data = (
             ("files", ("ok.pdf", io.BytesIO(payload), "application/pdf")),
         )
-        resp = client.post("/extract/batch", headers=auth_headers, files=data)
+        resp = client.post("/invoice/batch", headers=auth_headers, files=data)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert len(body) == 1
@@ -181,13 +181,13 @@ class TestBatchExtract:
             ("files", (f"{i}.pdf", io.BytesIO(chunk), "application/pdf"))
             for i in range(3)  # 3 * 0.5 = 1.5 MB > 1 MB
         )
-        resp = client.post("/extract/batch", headers=auth_headers, files=data)
+        resp = client.post("/invoice/batch", headers=auth_headers, files=data)
         assert resp.status_code == 400
         assert "Total size too large" in resp.json()["detail"]
 
     def test_no_files(self, auth_headers):
         """Missing 'files' field should return 400."""
-        resp = client.post("/extract/batch", headers=auth_headers)
+        resp = client.post("/invoice/batch", headers=auth_headers)
         assert resp.status_code == 400
         assert "multipart" in resp.json()["detail"].lower() or "No files" in resp.json()["detail"]
 
@@ -202,7 +202,7 @@ class TestBatchExtract:
                 {"filename": "火车票02.pdf", "base64": b},
             ]
         }
-        resp = client.post("/extract/batch", headers=auth_headers, json=payload)
+        resp = client.post("/invoice/batch", headers=auth_headers, json=payload)
         assert resp.status_code == 200
         body = resp.json()
         assert len(body) == 2
@@ -219,17 +219,114 @@ class TestBatchExtract:
                 {"filename": "bad.pdf", "base64": "not-valid-base64!!!"},
             ]
         }
-        resp = client.post("/extract/batch", headers=auth_headers, json=payload)
+        resp = client.post("/invoice/batch", headers=auth_headers, json=payload)
         assert resp.status_code == 400
         assert "Invalid base64" in resp.json()["detail"]
 
     def test_json_missing_base64(self, auth_headers):
-        """JSON missing base64 field should return 400."""
+        """JSON 里一个来源都没给 → 400，并列出全部可用来源。"""
         payload = {
             "files": [
                 {"filename": "bad.pdf"},
             ]
         }
-        resp = client.post("/extract/batch", headers=auth_headers, json=payload)
+        resp = client.post("/invoice/batch", headers=auth_headers, json=payload)
         assert resp.status_code == 400
-        assert "Missing 'base64'" in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert "Missing" in detail
+        assert "url" in detail and "file_path" in detail and "base64" in detail
+
+    def test_json_with_url_input(self, auth_headers):
+        """JSON 的 ``files[]`` 里直接给 URL —— 与 /invoice 的 url 入参对齐。"""
+        from urllib.parse import quote
+
+        from tests._helpers import serve_samples
+
+        with serve_samples() as base:
+            url = f"{base}/{quote('铁路电子客票/火车票01.pdf')}"
+            payload = {"files": [{"filename": "火车票01.pdf", "url": url}]}
+            resp = client.post("/invoice/batch", headers=auth_headers, json=payload)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert len(body) == 1
+        assert body[0]["file"] == "火车票01.pdf"
+        assert body[0]["invoice_type"] == "电子发票（铁路电子客票）"
+        assert body[0]["message"] == "success"
+
+    def test_multipart_urls_field(self, auth_headers):
+        """multipart 的 ``urls`` 字段 —— 远端文件地址。"""
+        from urllib.parse import quote
+
+        from tests._helpers import serve_samples
+
+        with serve_samples() as base:
+            url = f"{base}/{quote('铁路电子客票/火车票01.pdf')}"
+            resp = client.post(
+                "/invoice/batch",
+                headers=auth_headers,
+                files=[("urls", (None, url))],
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert len(body) == 1
+        assert body[0]["invoice_type"] == "电子发票（铁路电子客票）"
+        assert body[0]["message"] == "success"
+
+    def test_mixed_upload_and_url_keep_order(self, auth_headers):
+        """上传文件与远端 URL 混传 —— 结果顺序与输入顺序一致。"""
+        from urllib.parse import quote
+
+        from tests._helpers import serve_samples
+
+        with serve_samples() as base:
+            url = f"{base}/{quote('铁路电子客票/火车票02.pdf')}"
+            resp = client.post(
+                "/invoice/batch",
+                headers=auth_headers,
+                files=[
+                    ("files", ("火车票01.pdf", _load("铁路电子客票/火车票01.pdf"),
+                               "application/pdf")),
+                    ("urls", (None, url)),
+                ],
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert [item["file"] for item in body] == ["火车票01.pdf", "火车票02.pdf"]
+        assert all(item["message"] == "success" for item in body)
+
+    def test_json_top_level_url_and_files_conflict(self, auth_headers):
+        """顶层 url 与 files 数组同时给 → 400，不再静默忽略顶层 url。"""
+        import base64
+        from urllib.parse import quote
+
+        from tests._helpers import serve_samples
+
+        payload_b64 = base64.b64encode(_load("铁路电子客票/火车票01.pdf")).decode()
+        with serve_samples() as base:
+            url = f"{base}/{quote('铁路电子客票/火车票02.pdf')}"
+            resp = client.post(
+                "/invoice/batch",
+                headers=auth_headers,
+                json={
+                    "files": [{"filename": "火车票01.pdf", "base64": payload_b64}],
+                    "url": url,
+                },
+            )
+        assert resp.status_code == 400
+        assert "not both" in resp.json()["detail"]
+
+    def test_unreachable_url(self, auth_headers):
+        """远端抓不到 → 400。"""
+        from urllib.parse import quote
+
+        from tests._helpers import serve_samples
+
+        with serve_samples() as base:
+            url = f"{base}/{quote('铁路电子客票/不存在.pdf')}"
+            resp = client.post(
+                "/invoice/batch",
+                headers=auth_headers,
+                json={"files": [{"filename": "x.pdf", "url": url}]},
+            )
+        assert resp.status_code == 400
+        assert "Failed to fetch URL" in resp.json()["detail"]

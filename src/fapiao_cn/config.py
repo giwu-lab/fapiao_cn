@@ -23,17 +23,17 @@ class Settings(BaseSettings):
     version: str = "1.2.0"
 
     # pdfplumber does not render PDF to images; keep for future OCR fallback.
-    # /extract 与 /extract/batch 共用这一个上限，调大它等于同时放宽两个入口。
+    # /invoice 与 /invoice/batch 共用这一个上限，调大它等于同时放宽两个入口。
     max_file_mb: int = 10
 
     # Batch extraction limits
-    # 单文件上限不在这里：/extract 与 /extract/batch 共用 max_file_mb。
+    # 单文件上限不在这里：/invoice 与 /invoice/batch 共用 max_file_mb。
     max_batch_files: int = 50          # max files per batch request
     max_batch_total_mb: int = 500      # max total size per batch request
 
     # Performance
     cache_size: int = 128              # LRU parse-result cache; 0 disables
-    batch_workers: int = 4             # /extract/batch thread-pool size
+    batch_workers: int = 4             # /invoice/batch thread-pool size
 
     # Optional 国家税务总局 verification proxy (FC_VERIFY_*)
     verify_enabled: bool = False

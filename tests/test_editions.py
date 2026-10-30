@@ -148,7 +148,7 @@ class TestEnterpriseRoutes:
         )
         assert resp.status_code == 401
         resp = client.post(
-            "/extract/batch",
+            "/invoice/batch",
             files=[("files", ("x.pdf", b"%PDF-1.4"))],
         )
         assert resp.status_code == 401
@@ -186,7 +186,7 @@ class TestEnterpriseRoutes:
 
     def test_batch_endpoint_gated(self, auth_headers):
         resp = client.post(
-            "/extract/batch",
+            "/invoice/batch",
             headers=auth_headers,
             files=[("files", ("x.pdf", b"%PDF-1.4"))],
         )
@@ -201,12 +201,36 @@ class TestEnterpriseRoutes:
     def test_routes_exist_in_both_editions(self):
         """两版路由表一致 —— 客户端不会因为版本差异拿到 404。"""
         paths = {route.path for route in app.routes}
-        assert "/extract/batch" in paths
+        assert "/invoice/batch" in paths
         assert "/customs/batch" in paths
+
+    def test_renamed_paths_present_and_old_gone(self):
+        """改名后的端点在，新名字的路由表里；旧路径**不存在**。
+
+        端点更名（BREAKING）：``/extract`` → ``/invoice``，
+        ``/extract/batch`` → ``/invoice/batch``。旧路径请求得到 404。
+        ``/extract-and-verify`` 按约定**不改名**。
+        """
+
+        paths = {route.path for route in app.routes}
+        assert "/invoice" in paths
+        assert "/invoice/batch" in paths
+        assert "/extract" not in paths
+        assert "/extract/batch" not in paths
+        # 这一批路径不在本次更名范围内
+        assert "/extract-and-verify" in paths
+        assert "/raw" in paths
+        assert "/customs/batch" in paths
+
+    def test_old_paths_return_404(self, auth_headers):
+        """旧路径真的请求不动 —— 404，不是 405 / 500。"""
+
+        assert client.post("/extract", headers=auth_headers).status_code == 404
+        assert client.post("/extract/batch", headers=auth_headers).status_code == 404
 
     def test_openapi_marks_enterprise_paths(self):
         schema = app.openapi()
-        for path in ("/extract/batch", "/customs/batch"):
+        for path in ("/invoice/batch", "/customs/batch"):
             assert path in schema["paths"]
             assert schema["paths"][path]["post"]["x-required-edition"] == "ee"
 

@@ -50,7 +50,7 @@ docker buildx build -t fapiao_cn:1.2.0-ce .                              # 或�
 
 ```bash
 docker compose up -d
-curl -F file=@samples/新电子发票-标准/购_材料_01.pdf http://localhost:8091/extract
+curl -F file=@samples/新电子发票-标准/购_材料_01.pdf http://localhost:8091/invoice
 ```
 
 ### 本地开发
@@ -130,33 +130,81 @@ print(resp.seller_name, resp.total_amount, resp.message)
 | GET | `/capabilities` | 当前发行版与可用能力（公开） |
 | GET | `/formats` | 支持的全部票种 |
 | GET | `/formats/customs` | 海关出口货物报关单字段 schema（**两版共有的响应契约**，只有企业版能实际解析报关单） |
-| POST | `/extract` | 单文件提取 |
-| POST | `/extract/batch` | **企业版** — 批量提取（并行，按输入顺序返回） |
+| POST | `/invoice` | 单文件提取 |
+| POST | `/invoice/batch` | **企业版** — 批量提取（并行，按输入顺序返回） |
 | POST | `/customs/batch` | **企业版** — 海关出口货物报关单**批量**提取（操作联 / 出口退税联），一次可传多份 |
 | POST | `/raw` | 仅返回 PDF 原始文本，XML/OFD 拒绝 |
 | POST | `/verify` | 国税查验代理（需 `FC_VERIFY_ENABLED=true`） |
 | POST | `/extract-and-verify` | 提取 + 查验一站式 |
 
-`/extract`、`/extract/batch`、`/raw` 支持 `multipart/form-data`（`file` / `files` 字段）和 `application/json`（`file_path` / `file_base64` / `url`）两种入参：
+> ⚠️ **破坏性变更**：`POST /extract` 已更名为 **`POST /invoice`**，
+> `POST /extract/batch` 已更名为 **`POST /invoice/batch`**。旧路径**已不存在**
+> （请求它们得到 404）。迁移只要把 URL 里的 `/extract` 一段换成 `/invoice` ——
+> **请求体、鉴权 scope（`extract`）、响应结构一律不变**。
+> `/raw`、`/verify`、`/customs/batch`、`/extract-and-verify` 路径不变。
+
+`/invoice`、`/invoice/batch`、`/raw` 支持 `multipart/form-data`（`file` / `files` 字段）和 `application/json`（`file_path` / `file_base64` / `url`）两种入参：
 
 ```bash
 # multipart
-curl -F "file=@samples/新电子发票-标准/购_材料_01.pdf" http://localhost:8091/extract
+curl -F "file=@samples/新电子发票-标准/购_材料_01.pdf" http://localhost:8091/invoice
 
 # JSON
 curl -H "Content-Type: application/json" \
   -d '{"file_path": "samples/新电子发票-标准/购_材料_01.pdf"}' \
-  http://localhost:8091/extract
+  http://localhost:8091/invoice
 
 # /raw 响应
 # {"text": "...", "lines": ["..."], "page_count": 1}
 ```
 
-`/extract/batch` 限制：最多 50 个文件、单文件 10 MB（与 `/extract` 一致，由 `FC_MAX_FILE_MB` 统一控制）、总大小 500 MB。
+`/invoice/batch` 限制：最多 50 个文件、单文件 10 MB（与 `/invoice` 一致，由 `FC_MAX_FILE_MB` 统一控制）、总大小 500 MB。
+
+### 批量端点的入参（`/invoice/batch`、`/customs/batch`）
+
+批量端点的每个文件都可以用**三种来源**之一，跟单文件端点 `/invoice` 完全对齐：
+
+| 来源 | JSON | multipart |
+| --- | --- | --- |
+| 远端 URL | `{"files": [{"filename": "...", "url": "https://..."}]}` | `-F "urls=https://..."`（可重复）/ `-F "url=https://..."` |
+| 服务端路径 | `{"files": [{"filename": "...", "file_path": "/data/a.pdf"}]}` | `-F "file_paths=/data/a.pdf"`（可重复） |
+| base64 | `{"files": [{"filename": "...", "base64": "..."}]}` | — |
+| 上传的二进制 | — | `-F "files=@a.pdf"`（可重复） |
+
+```bash
+# 远端 URL：JSON
+curl -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"files": [{"filename": "a.pdf", "url": "https://example.com/a.pdf"}]}' \
+  http://localhost:8091/invoice/batch
+
+# 远端 URL：multipart（也可以直接写进 files 字段）
+curl -H "X-API-Key: $KEY" \
+  -F "urls=https://example.com/a.pdf" \
+  -F "urls=https://example.com/b.pdf" \
+  http://localhost:8091/invoice/batch
+
+# 混着传也行，顺序按输入顺序返回
+curl -H "X-API-Key: $KEY" \
+  -F "files=@本地发票.pdf" \
+  -F "urls=https://example.com/远程发票.pdf" \
+  http://localhost:8091/invoice/batch
+```
+
+几条约定：
+
+- **单文件快捷写法**：JSON 顶层给 `{"url": ...}` / `{"file_path": ...}` / `{"file_base64": ...}`
+  等价于一份文件的批量，键名与 `/invoice` 一致。但顶层与 `files` 数组**不能同时给** ——
+  同时给会返回 400，而不是像以前那样把顶层 url 悄悄忽略掉。
+- **URL 抓取走的是和 `/invoice` 同一套防护**：云元数据地址（`169.254.169.254` 等）
+  一律拒绝、响应体按 `FC_MAX_FILE_MB` 截断、请求 30 秒超时、只允许 http/https。
+- **`file_path` 依然受 `FC_ALLOWED_FILE_PATHS` 白名单约束**，白名单为空时该来源整体关闭。
+- **文件名**：JSON 里给了 `filename` 就用它；没给则从 URL 路径（或路径）推导。
+- **失败是整批 400**：某个 URL 抓不到、base64 解不开、文件超限，都会让整批请求返回 400
+  并说明是哪一项（单文件**解析**失败才是逐项报错，记在该项的 `message` 里）。
 
 ### 报关单批量提取（`POST /customs/batch`，企业版）
 
-一次可以传多份报关单，返回数组，顺序与上传顺序一致。入参与 `/extract/batch`
+一次可以传多份报关单，返回数组，顺序与上传顺序一致。入参与 `/invoice/batch`
 完全对齐 —— multipart 里**重复的 `files` 字段**，或 JSON 的
 `{"files": [{"filename": ..., "base64": ...}]}`：
 
@@ -167,11 +215,16 @@ curl -H "X-API-Key: $KEY" \
   -F "files=@报关单B.pdf" \
   http://localhost:8091/customs/batch
 
+# 远端报关单地址
+curl -H "X-API-Key: $KEY" \
+  -F "urls=https://example.com/报关单A.pdf" \
+  http://localhost:8091/customs/batch
+
 # 响应：数组，每项一份报关单
 # [{"customs_no": "223120260001921706", "items": [...], ...}, {...}]
 ```
 
-限额与 `/extract/batch` 相同（最多 50 个、单文件 10 MB、总 500 MB），并发由
+限额与 `/invoice/batch` 相同（最多 50 个、单文件 10 MB、总 500 MB），并发由
 `FC_BATCH_WORKERS` 控制。
 
 每条明细（`items[]`）的字段与票面列的对应关系：
@@ -201,7 +254,7 @@ curl -H "X-API-Key: $KEY" \
 > `/extract/customs` **已不存在**（请求它得到 404）。迁移：URL 换成
 > `/customs/batch`，字段名从 `file` 换成 `files`，响应取数组。
 
-> 把报关单误发到 `/extract` 或 `/extract/batch` 时，服务不再**静默返回空字段**
+> 把报关单误发到 `/invoice` 或 `/invoice/batch` 时，服务不再**静默返回空字段**
 > （那是数据丢失），而是返回 422 并在 `message` 里指明「请走 `/customs/batch`」。
 
 ## 发行版：CE（开源版）与 EE（企业版）
@@ -211,7 +264,7 @@ curl -H "X-API-Key: $KEY" \
 | 发行包 | 内容 | 能力 |
 | --- | --- | --- |
 | `fapiao_cn` | 开源版（CE） | 发票 / 客票 / 费用分类 / 查验代理 |
-| `fapiao_cn_ee` | 企业版（EE），依赖 `fapiao_cn==<同版本>` | **报关单解析**（`/customs/batch`）、**批量提取**（`/extract/batch`） |
+| `fapiao_cn_ee` | 企业版（EE），依赖 `fapiao_cn==<同版本>` | **报关单解析**（`/customs/batch`）、**批量提取**（`/invoice/batch`） |
 
 **商业边界落在发行包上，不是运行时的 if。** CE 的 wheel 里没有报关单解析器，
 CE 的镜像里连 `fapiao_cn_ee` 的字节码都不存在（构建时按 `ARG EDITION` 把
@@ -346,7 +399,7 @@ CE ↔ EE 的接缝在 `fapiao_cn.plugins.FapiaoPlugin`：企业版实现
 
 ### `items[]` 商品明细
 
-`/extract` 的响应里带一个 `items` 数组。**目前仅 XML 全电发票填充；PDF 与 OFD 恒为 `[]`**
+`/invoice` 的响应里带一个 `items` 数组。**目前仅 XML 全电发票填充；PDF 与 OFD 恒为 `[]`**
 （OFD 的明细可解析但暂未启用——其 `CustomTag.xml` 同一文件内混用「`GoodsInfos` 包装」
 与「`root` 直挂」两套布局，漏掉后者会静默少数据）。
 
@@ -396,7 +449,7 @@ HTTP 422 响应体就是 `ExtractResponse` / `PdfRaw`，错误字符串完整保
 
 ### `expense_category` 消费类别
 
-`/extract` 响应里带 `expense_category` / `expense_category_label` / `expense_category_source` 三字段，对单张发票做企业报销常用的归类（适合按类目做预算统计、凭证归档、报销审批路由）。
+`/invoice` 响应里带 `expense_category` / `expense_category_label` / `expense_category_source` 三字段，对单张发票做企业报销常用的归类（适合按类目做预算统计、凭证归档、报销审批路由）。
 
 | `expense_category` | `expense_category_label` | 含义 | 命中来源示例 |
 | --- | --- | --- | --- |
@@ -439,8 +492,8 @@ HTTP 422 响应体就是 `ExtractResponse` / `PdfRaw`，错误字符串完整保
 服务端点（除 `/health`）默认需要 API Key，Header 两种形式任选：
 
 ```bash
-curl -H "Authorization: Bearer $FC_KEY" http://localhost:8091/extract -F file=@samples/新电子发票-标准/购_材料_01.pdf
-curl -H "X-API-Key: $FC_KEY"            http://localhost:8091/extract -F file=@samples/新电子发票-标准/购_材料_01.pdf
+curl -H "Authorization: Bearer $FC_KEY" http://localhost:8091/invoice -F file=@samples/新电子发票-标准/购_材料_01.pdf
+curl -H "X-API-Key: $FC_KEY"            http://localhost:8091/invoice -F file=@samples/新电子发票-标准/购_材料_01.pdf
 ```
 
 dev 模式首次启动需要先写 key 到 `.env`：
@@ -449,7 +502,7 @@ dev 模式首次启动需要先写 key 到 `.env`：
 echo "FC_API_KEYS=\"sk_dev_$(openssl rand -base64 24 | tr -d '=' | tr '/+' '_-')\"" >> .env
 chmod 600 .env
 curl -H "Authorization: Bearer $(grep FC_API_KEYS .env | cut -d= -f2 | tr -d '\"')" \
-  http://localhost:8091/extract -F file=@samples/新电子发票-标准/购_材料_01.pdf
+  http://localhost:8091/invoice -F file=@samples/新电子发票-标准/购_材料_01.pdf
 ```
 
 ### 配置 Key
@@ -485,7 +538,7 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 
 | Scope | 端点 |
 | --- | --- |
-| `extract` | `/extract`、`/extract/batch`（企业版）、`/customs/batch`（企业版）、`/raw`、`/extract-and-verify`、`/formats`、`/formats/customs` |
+| `extract` | `/invoice`、`/invoice/batch`（企业版）、`/customs/batch`（企业版）、`/raw`、`/extract-and-verify`、`/formats`、`/formats/customs` |
 | `verify` | `/verify` |
 | `admin` | `/health/full`（超集，含 extract / verify） |
 
@@ -509,7 +562,7 @@ FC_API_KEYS_FILE=/etc/fapiao_cn/keys.json
 所有受保护请求（无论成功/失败）写入 `logs/audit.log`（10 MiB × 5 自动轮转）：
 
 ```
-2026-09-18 10:23:45 [AUDIT] POST /extract -> 200 (42ms) key=a1b2c3d4 label=n8n-prod from=10.0.0.7 in=1258291B out=1834B
+2026-09-18 10:23:45 [AUDIT] POST /invoice -> 200 (42ms) key=a1b2c3d4 label=n8n-prod from=10.0.0.7 in=1258291B out=1834B
 2026-09-18 10:23:46 [AUDIT] GET /formats -> 401 (0ms) key=- label=- from=10.0.0.7 in=0B out=0B reason=missing_token
 ```
 
@@ -540,8 +593,8 @@ environment:
 | --- | --- | --- |
 | `FC_HOST` / `FC_PORT` | `0.0.0.0` / `8091` | 绑定地址 / 端口 |
 | `FC_CACHE_SIZE` | `128` | LRU 缓存条目数（`0` 关闭） |
-| `FC_BATCH_WORKERS` | `4` | `/extract/batch` 并行线程数 |
-| `FC_MAX_FILE_MB` | `10` | 单文件最大字节（`/extract` 与 `/extract/batch` 共用） |
+| `FC_BATCH_WORKERS` | `4` | `/invoice/batch` 并行线程数 |
+| `FC_MAX_FILE_MB` | `10` | 单文件最大字节（`/invoice` 与 `/invoice/batch` 共用） |
 | `FC_MAX_BATCH_FILES` | `50` | 批量最大文件数 |
 | `FC_MAX_BATCH_TOTAL_MB` | `500` | 批量总大小 |
 | `FC_VERIFY_ENABLED` | `false` | 启用国税查验代理 |

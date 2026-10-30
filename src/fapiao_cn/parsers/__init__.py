@@ -77,7 +77,7 @@ _register(
 # 报关单（customs_declaration）**不在这里注册**：它是企业版能力，解析器
 # 随 fapiao_cn_ee 发行包一起发布，由企业版插件在**获得授权时**通过
 # register_external() 注入。开源版的 dispatch 表里没有这条规则，因此
-# /formats 不会列出报关单，/extract 也不会把报关单 PDF 派给报关单解析器。
+# /formats 不会列出报关单，/invoice 也不会把报关单 PDF 派给报关单解析器。
 
 
 DEFAULT_NAME = "new"

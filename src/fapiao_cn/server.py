@@ -184,10 +184,10 @@ def _register_customs_unavailable(app: FastAPI) -> None:
 
 
 def _register_batch_unavailable(app: FastAPI) -> None:
-    """注册 ``/extract/batch`` 的 403 占位路由。"""
+    """注册 ``/invoice/batch`` 的 403 占位路由。"""
 
     @app.post(
-        "/extract/batch",
+        "/invoice/batch",
         dependencies=[
             Depends(auth_required("extract")),
             Depends(require_feature(Feature.BATCH)),
@@ -391,7 +391,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.title, version=settings.version, lifespan=_lifespan)
 
     # CORS middleware — allows browser frontends (barda at :3000, etc.)
-    # to POST files to /extract. Default * for zero-config deployment;
+    # to POST files to /invoice. Default * for zero-config deployment;
     # override via env (FC_CORS_ALLOW_ORIGINS) for production hardening.
     _allow_origins = [
         o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()
@@ -439,7 +439,7 @@ def create_app() -> FastAPI:
         except Exception:
             checks["pdfplumber"] = False
 
-        # H22: 可写日志目录是 /extract 留下审计记录的前提。用与 cwd 无关的
+        # H22: 可写日志目录是 /invoice 留下审计记录的前提。用与 cwd 无关的
         # app root 定位，避免探针在 src/ 下凭空建目录。
         try:
             log_dir = _resolve_app_root() / "logs"
@@ -545,7 +545,7 @@ def create_app() -> FastAPI:
         _register_customs_unavailable(app)
 
     @app.post(
-        "/extract",
+        "/invoice",
         response_model=ExtractResponse,
         dependencies=[Depends(auth_required("extract"))],
     )
@@ -600,7 +600,7 @@ def create_app() -> FastAPI:
         """Return only the PDF raw text payload (no field extraction).
 
         Useful for debugging a PDF outside the parse pipeline.  Same
-        input shapes as ``/extract``.  XML inputs are rejected with 400
+        input shapes as ``/invoice``.  XML inputs are rejected with 400
         because the raw-text view only makes sense for PDFs.
         """
 

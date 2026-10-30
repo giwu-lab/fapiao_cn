@@ -1,4 +1,4 @@
-"""End-to-end tests for the ``/extract`` HTTP endpoint.
+"""End-to-end tests for the ``/invoice`` HTTP endpoint.
 
 The HTTP layer adds a thin wrapper around ``formats.parse_pdf`` (PDF / XML /
 OFD auto-detection).  These tests assert that every ``InvoiceRecord`` field
@@ -29,7 +29,7 @@ def _load(name: str) -> bytes:
 
 
 class TestExtractExpenseCategoryWired:
-    """``expense_category`` 字段必须贯穿到 ``/extract`` 响应里。"""
+    """``expense_category`` 字段必须贯穿到 ``/invoice`` 响应里。"""
 
     @pytest.mark.parametrize(
         "sample_path, expected_cat, expected_source",
@@ -58,7 +58,7 @@ class TestExtractExpenseCategoryWired:
         settings.expense_category_enabled = True
         contents = _load(sample_path)
         resp = client.post(
-            "/extract",
+            "/invoice",
             headers=auth_headers,
             files={"file": (os.path.basename(sample_path), contents)},
         )
@@ -85,7 +85,7 @@ class TestExtractExpenseCategoryWired:
     def test_extract_customs_skips_classification(
         self, auth_headers, sample_path
     ):
-        """把报关单误发给 ``/extract`` 时，**不能**被静默压成空字段。
+        """把报关单误发给 ``/invoice`` 时，**不能**被静默压成空字段。
 
         企业版：报关单解析器是「守门包装」—— 报关单记录不是
         ``InvoiceRecord``，发票管线会把它压成一堆空字符串而 message 仍是
@@ -100,7 +100,7 @@ class TestExtractExpenseCategoryWired:
         settings.expense_category_enabled = True
         contents = _load(sample_path)
         resp = client.post(
-            "/extract",
+            "/invoice",
             headers=auth_headers,
             files={"file": (os.path.basename(sample_path), contents)},
         )
@@ -131,7 +131,7 @@ class TestExtractExpenseCategoryWired:
         try:
             contents = _load("新电子发票-标准/购_滴滴_01.pdf")
             resp = client.post(
-                "/extract",
+                "/invoice",
                 headers=auth_headers,
                 files={"file": ("购_滴滴_01.pdf", contents)},
             )
