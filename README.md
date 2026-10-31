@@ -12,7 +12,7 @@
 镜像特性：多阶段 `python:3.12-slim`、非 root、HEALTHCHECK 内置、`/app/logs` volume 挂载、时区 `Asia/Shanghai`、镜像 < 250 MB。Dockerfile 默认走国内 APT 镜像（`APT_MIRROR=mirrors.aliyun.com`），需要切回官方源：
 
 ```bash
-docker build --build-arg APT_MIRROR= -t fapiao_cn:1.3.1-ce .
+docker build --build-arg APT_MIRROR= -t fapiao_cn:1.3.0-ce .
 ```
 
 ### 构建方案
@@ -31,7 +31,7 @@ Dockerfile 会自动判断走哪条，**两条路都不需要改 Dockerfile**：
 bash scripts/prepare_wheels.sh           # 等价于 pip wheel --wheel-dir=wheels <deps>
 # 或指定 PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ bash scripts/prepare_wheels.sh
 
-docker build -t fapiao_cn:1.3.1-ce .
+docker build -t fapiao_cn:1.3.0-ce .
 ```
 
 > wheels/ 不用每次都重生成；只有锁定依赖版本时才需要重跑。脚本会自动用 `.venv/bin/python3`（如有）或系统 `python3`。
@@ -41,7 +41,7 @@ docker build -t fapiao_cn:1.3.1-ce .
 
 ```bash
 docker buildx create --use --driver docker-container --network host   # 一次性建 host 网络 builder
-docker buildx build -t fapiao_cn:1.3.1-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
+docker buildx build -t fapiao_cn:1.3.0-ce .                              # 或老 builder：DOCKER_BUILDKIT=0 docker build --network=host .
 ```
 
 **方案 C：完全离线**（路线 1 失败 + 上面共享网络也没法用时）—— 在主机上准备好 wheels **和** 基础 deb 包（apt-offline 工具链），用本地 deb 仓库喂给镜像。绝大多数情况下路线 1 + 共享网络已够用，此处不展开。
@@ -134,7 +134,7 @@ print(resp.seller_name, resp.total_amount, resp.message)
 | POST | `/invoice` | 单文件提取 |
 | POST | `/invoice/batch` | **企业版** — 批量提取（并行，按输入顺序返回） |
 | POST | `/customs/batch` | **企业版** — 海关出口货物报关单**批量**提取（操作联 / 出口退税联），一次可传多份 |
-| POST | `/acceptance/batch` | **企业版** — 电子银行承兑汇票**批量**提取（1.3.1 起单文件端点 `POST /acceptance` 已撤下） |
+| POST | `/acceptance/batch` | **企业版** — 电子银行承兑汇票**批量**提取（一次多份，按输入顺序返回数组） |
 | POST | `/raw` | 仅返回 PDF 原始文本，XML/OFD 拒绝 |
 | POST | `/verify` | 国税查验代理（需 `FC_VERIFY_ENABLED=true`） |
 | POST | `/extract-and-verify` | 提取 + 查验一站式 |
@@ -272,9 +272,10 @@ curl -H "X-API-Key: $KEY" \
   http://localhost:8091/acceptance/batch
 ```
 
-> **1.3.1 变更**：单文件端点 `POST /acceptance` 已**撤下** —— 两版都没有这个
-> 路径（请求得到 404，不是 403）。要解析单张票据时，用批量端点提交一份即可：
-> `-F "files=@承兑汇票A.pdf"`。响应是**数组**，顺序与输入顺序一致。
+> **单文件端点不存在**：本功能**只有批量端点** `POST /acceptance/batch` —— 两版
+> 都没有 `POST /acceptance` 这个路径（请求得到 404，不是 403）。要解析单张
+> 票据时，用批量端点提交一份即可：`-F "files=@承兑汇票A.pdf"`。响应是**数组**，
+> 顺序与输入顺序一致。
 
 响应字段与票面的对应关系：
 
@@ -341,7 +342,7 @@ JSON 许可证：
 docker run ... \
   -e FC_LICENSE_FILE=/app/license.json \
   -v /path/to/license.json:/app/license.json:ro \
-  fapiao_cn:1.3.1-ee
+  fapiao_cn:1.3.0-ee
 ```
 
 - 许可证有效 → 开放被授权的能力；
@@ -403,12 +404,12 @@ docker run ... \
 
 ```bash
 # ① 开源版：直接在本仓库构建
-docker build -t fapiao_cn:1.3.1-ce .
+docker build -t fapiao_cn:1.3.0-ce .
 
 # ② 企业版：在企业版仓库（与本仓库同级检出）里把 wheel 产出到本仓库的 wheels/
 python ../fapiao_cn_ee/scripts/build_ee_wheel.py \
     --ce-root . --wheels-dir ./wheels
-docker build --build-arg EDITION=ee -t fapiao_cn:1.3.1-ee .
+docker build --build-arg EDITION=ee -t fapiao_cn:1.3.0-ee .
 ```
 
 `build_ee_wheel.py` 不进 wheel（只进 sdist），签发工具与厂商密钥始终留在

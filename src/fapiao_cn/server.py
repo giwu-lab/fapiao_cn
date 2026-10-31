@@ -251,8 +251,8 @@ def _register_acceptance_unavailable(app: FastAPI) -> None:
 
     与报关单 / 批量提取同理：路径在两版里一致，能力由许可证决定。
 
-    **只有批量端点**（``POST /acceptance/batch``）—— 1.3.1 起单文件端点
-    ``POST /acceptance`` 已撤下，两版都没有这个路径（请求会得到 404）。
+    **只有批量端点**（``POST /acceptance/batch``）—— 单文件端点
+    ``POST /acceptance`` 不存在，两版都没有这个路径（请求会得到 404）。
     """
 
     @app.post(

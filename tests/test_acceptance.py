@@ -4,7 +4,7 @@
 
 1. **两版路由表一致** —— ``/acceptance/batch`` 在开源版里也存在，
    未授权时返回 403 + 结构化 body（而不是 404）；单文件端点
-   ``POST /acceptance`` 自 1.3.1 起**已撤下**，两版都没有这个路径；
+   ``POST /acceptance`` **不存在**，两版都没有这个路径；
 2. **鉴权优先于版本判定** —— 没有 key 先 401；
 3. **解析实现随企业版发行包发布** —— 开源版跑不到真实解析，用
    ``ee_feature_enabled("acceptance")`` 门控。
@@ -141,7 +141,7 @@ class TestRoutes:
         assert "/acceptance/batch" in paths
 
     def test_single_file_route_is_removed(self):
-        """单文件端点自 1.3.1 起撤下 —— 两版都没有这个路径。"""
+        """单文件端点不存在 —— 两版都没有这个路径。"""
         paths = {route.path for route in app.routes}
         assert "/acceptance" not in paths
 
@@ -200,7 +200,7 @@ class TestGating:
 class TestParseRealSamples:
     @pytest.mark.parametrize("name", sorted(SAMPLES))
     def test_single_file(self, auth_headers, name):
-        """单份文件走批量端点 —— 自 1.3.1 起没有单文件端点了。"""
+        """单份文件走批量端点 —— 本功能只有批量端点。"""
         expected = SAMPLES[name]
         resp = client.post(
             "/acceptance/batch",
