@@ -61,8 +61,9 @@ class FapiaoPlugin(Protocol):
         ...
 
     def register_acceptance_route(self, app: FastAPI) -> None:
-        """注册电子承兑汇票提取路由（``POST /acceptance`` 与
-        ``POST /acceptance/batch``）的真实实现。
+        """注册电子承兑汇票批量提取路由（``POST /acceptance/batch``）的真实实现。
+
+        **只有批量端点** —— 1.3.1 起单文件端点 ``POST /acceptance`` 已撤下。
 
         这个方法是后加的 —— 旧版本的企业版包没有它。CE 侧用
         ``getattr`` 兜底成 403 占位路由，所以老插件配新开源版不会起不来。

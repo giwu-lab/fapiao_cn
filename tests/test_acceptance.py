@@ -1,9 +1,10 @@
-"""电子银行承兑汇票端点的端到端测试。
+"""电子银行承兑汇票批量端点的端到端测试。
 
 三条不变量：
 
-1. **两版路由表一致** —— ``/acceptance`` 与 ``/acceptance/batch`` 在开源版
-   里也存在，未授权时返回 403 + 结构化 body（而不是 404）；
+1. **两版路由表一致** —— ``/acceptance/batch`` 在开源版里也存在，
+   未授权时返回 403 + 结构化 body（而不是 404）；单文件端点
+   ``POST /acceptance`` 自 1.3.1 起**已撤下**，两版都没有这个路径；
 2. **鉴权优先于版本判定** —— 没有 key 先 401；
 3. **解析实现随企业版发行包发布** —— 开源版跑不到真实解析，用
    ``ee_feature_enabled("acceptance")`` 门控。
@@ -137,23 +138,33 @@ class TestRoutes:
     def test_routes_exist_in_both_editions(self):
         """两版路由表一致 —— 客户端不会因为版本差异拿到 404。"""
         paths = {route.path for route in app.routes}
-        assert "/acceptance" in paths
         assert "/acceptance/batch" in paths
+
+    def test_single_file_route_is_removed(self):
+        """单文件端点自 1.3.1 起撤下 —— 两版都没有这个路径。"""
+        paths = {route.path for route in app.routes}
+        assert "/acceptance" not in paths
 
     def test_openapi_marks_enterprise_paths(self):
         schema = app.openapi()
-        for path in ("/acceptance", "/acceptance/batch"):
-            assert path in schema["paths"]
-            assert schema["paths"][path]["post"]["x-required-edition"] == "ee"
+        path = "/acceptance/batch"
+        assert path in schema["paths"]
+        assert schema["paths"][path]["post"]["x-required-edition"] == "ee"
 
     def test_unauthenticated_gets_401_not_403(self):
         """鉴权优先：没有 key 先 401，不泄漏版本信息。"""
-        resp = client.post("/acceptance", files=[("file", ("x.pdf", b"%PDF-1.4"))])
-        assert resp.status_code == 401
         resp = client.post(
             "/acceptance/batch", files=[("files", ("x.pdf", b"%PDF-1.4"))]
         )
         assert resp.status_code == 401
+
+    def test_removed_single_file_endpoint_returns_404(self):
+        """撤下的端点不是 403 —— 是压根没这个路由。"""
+        resp = client.post(
+            "/acceptance",
+            files=[("file", ("x.pdf", b"%PDF-1.4"))],
+        )
+        assert resp.status_code == 404
 
     def test_format_dictionary_is_available(self, auth_headers):
         """字段字典两版都有 —— 前端据此渲染界面。"""
@@ -168,22 +179,6 @@ class TestRoutes:
 
 
 class TestGating:
-    def test_acceptance_endpoint_gated(self, auth_headers):
-        resp = client.post(
-            "/acceptance",
-            headers=auth_headers,
-            files=[("file", ("x.pdf", b"%PDF-1.4"))],
-        )
-        if ee_feature_enabled("acceptance"):
-            # 已授权 —— 走到解析阶段，失败原因不是 403
-            assert resp.status_code != 403
-        else:
-            assert resp.status_code == 403
-            detail = resp.json()["detail"]
-            assert detail["error"] == "feature_not_available"
-            assert detail["feature"] == "acceptance"
-            assert detail["required_edition"] == "ee"
-
     def test_acceptance_batch_endpoint_gated(self, auth_headers):
         resp = client.post(
             "/acceptance/batch",
@@ -205,33 +200,36 @@ class TestGating:
 class TestParseRealSamples:
     @pytest.mark.parametrize("name", sorted(SAMPLES))
     def test_single_file(self, auth_headers, name):
+        """单份文件走批量端点 —— 自 1.3.1 起没有单文件端点了。"""
         expected = SAMPLES[name]
         resp = client.post(
-            "/acceptance",
+            "/acceptance/batch",
             headers=auth_headers,
-            files=[("file", (name, _sample(name)))],
+            files=[("files", (name, _sample(name)))],
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["message"] == "success"
-        assert data["bill_type"] == "电子银行承兑汇票"
-        assert data["page_count"] == 2
-        assert data["file"] == name
+        assert len(data) == 1
+        item = data[0]
+        assert item["message"] == "success"
+        assert item["bill_type"] == "电子银行承兑汇票"
+        assert item["page_count"] == 2
+        assert item["file"] == name
         for field, value in expected.items():
             if field == "endorsements":
                 continue
-            assert data[field] == value, f"{name}: {field}"
+            assert item[field] == value, f"{name}: {field}"
 
     @pytest.mark.parametrize("name", sorted(SAMPLES))
     def test_endorsements_are_present(self, auth_headers, name):
         expected = SAMPLES[name]
         resp = client.post(
-            "/acceptance",
+            "/acceptance/batch",
             headers=auth_headers,
-            files=[("file", (name, _sample(name)))],
+            files=[("files", (name, _sample(name)))],
         )
         assert resp.status_code == 200
-        endorsements = resp.json()["endorsements"]
+        endorsements = resp.json()[0]["endorsements"]
         assert len(endorsements) == expected["endorsements"]
         for e in endorsements:
             assert e["endorser"]
@@ -256,14 +254,19 @@ class TestParseRealSamples:
 
         name = "电子银行承兑汇票 (1).pdf"
         payload = {
-            "file_base64": base64.b64encode(_sample(name)).decode("ascii"),
+            "files": [
+                {
+                    "filename": name,
+                    "base64": base64.b64encode(_sample(name)).decode("ascii"),
+                }
+            ],
         }
-        resp = client.post("/acceptance", headers=auth_headers, json=payload)
+        resp = client.post("/acceptance/batch", headers=auth_headers, json=payload)
         assert resp.status_code == 200
-        assert resp.json()["bill_no"] == SAMPLES[name]["bill_no"]
+        assert resp.json()[0]["bill_no"] == SAMPLES[name]["bill_no"]
 
-    def test_non_acceptance_pdf_returns_422(self, auth_headers):
-        """不是电子承兑票 → 422，而不是一堆空字段。"""
+    def test_non_acceptance_pdf_is_reported_per_item(self, auth_headers):
+        """不是电子承兑票 → 错误落在**该项**的 message 上（不静默吞字段）。"""
         sample = (
             Path(__file__).resolve().parent.parent
             / "samples"
@@ -273,15 +276,18 @@ class TestParseRealSamples:
         if not sample.exists():
             pytest.skip("sample not available")
         resp = client.post(
-            "/acceptance",
+            "/acceptance/batch",
             headers=auth_headers,
-            files=[("file", ("bgd.pdf", sample.read_bytes()))],
+            files=[("files", ("bgd.pdf", sample.read_bytes()))],
         )
-        assert resp.status_code == 422
-        assert "acceptance" in str(resp.json()["detail"])
+        assert resp.status_code == 200
+        item = resp.json()[0]
+        assert item["message"].startswith("error:")
+        assert "acceptance" in item["message"]
+        assert item["bill_no"] == ""
 
     def test_acceptance_pdf_on_invoice_endpoint_returns_422(self, auth_headers):
-        """误投 ``/invoice`` → 422 并指明该走 ``/acceptance``（不能静默吞字段）。"""
+        """误投 ``/invoice`` → 422 并指明该走 ``/acceptance/batch``。"""
         name = "电子银行承兑汇票 (1).pdf"
         resp = client.post(
             "/invoice",
@@ -291,7 +297,7 @@ class TestParseRealSamples:
         assert resp.status_code == 422
         message = resp.json()["message"]
         assert message.startswith("error:")
-        assert "/acceptance" in message
+        assert "/acceptance/batch" in message
 
     def test_acceptance_pdf_on_invoice_batch_is_reported_per_item(self, auth_headers):
         """批量端点按设计返回 200，错误落在**该项**的 message 上。"""
@@ -304,7 +310,7 @@ class TestParseRealSamples:
         assert resp.status_code == 200
         item = resp.json()[0]
         assert item["message"].startswith("error:")
-        assert "/acceptance" in item["message"]
+        assert "/acceptance/batch" in item["message"]
 
 
 class TestParserRegistry:

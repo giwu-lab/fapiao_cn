@@ -247,25 +247,13 @@ def _register_batch_unavailable(app: FastAPI) -> None:
 
 
 def _register_acceptance_unavailable(app: FastAPI) -> None:
-    """注册电子承兑两个端点的 403 占位路由。
+    """注册电子承兑批量端点的 403 占位路由。
 
     与报关单 / 批量提取同理：路径在两版里一致，能力由许可证决定。
-    """
 
-    @app.post(
-        "/acceptance",
-        response_model=AcceptanceBill,
-        dependencies=[
-            Depends(auth_required("extract")),
-            Depends(require_feature(Feature.ACCEPTANCE)),
-        ],
-        openapi_extra={"x-required-edition": "ee"},
-    )
-    async def extract_acceptance_unavailable(request: Request):
-        raise HTTPException(
-            status_code=403,
-            detail=feature_not_available_payload(Feature.ACCEPTANCE),
-        )
+    **只有批量端点**（``POST /acceptance/batch``）—— 1.3.1 起单文件端点
+    ``POST /acceptance`` 已撤下，两版都没有这个路径（请求会得到 404）。
+    """
 
     @app.post(
         "/acceptance/batch",
@@ -685,9 +673,9 @@ def create_app() -> FastAPI:
     else:
         _register_batch_unavailable(app)
 
-    # 电子承兑汇票解析（企业版）。旧版本的企业版包还没有这个方法 ——
-    # 用 getattr 兜底成 403 占位路由：宁可少一个能力，也不能因为插件
-    # 版本对不上就把整个服务起不来。
+    # 电子承兑汇票解析（企业版，仅批量端点）。旧版本的企业版包还没有
+    # 这个方法 —— 用 getattr 兜底成 403 占位路由：宁可少一个能力，也不能
+    # 因为插件版本对不上就把整个服务起不来。
     register_acceptance = getattr(plugin, "register_acceptance_route", None)
     if callable(register_acceptance):
         register_acceptance(app)
